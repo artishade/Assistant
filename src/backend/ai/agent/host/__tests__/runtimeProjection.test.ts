@@ -1,0 +1,132 @@
+import type { AgentMessageView } from '@/shared/contracts/agent';
+
+import { toAgentErrorView, toAgentMessagePart, toCompactionAnchorPart } from '../runtimeProjection';
+import { toRuntimeHistory } from '../turnRuntimeInput';
+
+describe('Runtime output projection', () => {
+  test('keeps compaction ids distinct across turns and omits success metrics for failed folds', () => {
+    const failed = {
+      id: 'compaction-1',
+      phase: 'preflight' as const,
+      status: 'failed' as const,
+      startedAt: 1_000,
+      completedAt: 2_000,
+      inputTokensBefore: 112_000,
+      reason: 'summary-failed' as const,
+    };
+    const first = toCompactionAnchorPart(failed, 'turn-1');
+    const second = toCompactionAnchorPart(failed, 'turn-2');
+    expect(first.id).not.toBe(second.id);
+    expect(first.data).toEqual({
+      status: 'skipped',
+      phase: 'turn-start',
+      trigger: 'auto',
+      startedAt: '1970-01-01T00:00:01.000Z',
+      completedAt: '1970-01-01T00:00:02.000Z',
+      durationMs: 1_000,
+    });
+  });
+
+  test('persists callback failure details and replays partial sources without runtime stop policy', () => {
+    const details = {
+      status: 'partial',
+      results: [
+        { id: 'source-1', title: 'Available', url: 'https://example.com/a', content: 'Body' },
+      ],
+      failures: [
+        { input: 'https://example.com/b', kind: 'http', status: 404, message: 'Not found' },
+      ],
+    };
+    const error = {
+      code: 'web_lookup_failed',
+      message: 'Jina: page B not found',
+      retryable: false,
+    };
+    const part = toAgentMessagePart({
+      displayName: 'Fetch web page',
+      id: 'tool-call-1',
+      input: { urls: ['https://example.com/a', 'https://example.com/b'] },
+      providerName: 'web_fetch',
+      state: 'error',
+      toolCallId: 'call-1',
+      toolRef: { source: 'builtin', capabilityId: 'web_fetch' },
+      type: 'tool',
+      error,
+      output: { value: details, artifacts: [], failure: { scope: 'tool', error } },
+    });
+    const output = { value: { status: 'error', error, details }, artifacts: [] };
+    expect(part).toMatchObject({ state: 'error', output });
+    if (part.type !== 'tool') throw new Error('Expected a tool part');
+    expect(part.output).not.toHaveProperty('failure');
+
+    const message: AgentMessageView = {
+      id: 'assistant-1',
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      role: 'assistant',
+      status: 'success',
+      parts: [part],
+      usage: null,
+      stats: null,
+      modelId: null,
+      inferenceSnapshot: null,
+      createdAt: '2026-09-07T00:00:00Z',
+      updatedAt: '2026-09-07T00:00:00Z',
+    };
+    expect(
+      toRuntimeHistory([JSON.parse(JSON.stringify(message))])[0].messages[0].parts,
+    ).toContainEqual({
+      type: 'tool-result',
+      toolCallId: 'call-1',
+      isError: true,
+      output,
+    });
+  });
+
+  test('preserves the tool input-streaming lifecycle state', () => {
+    expect(
+      toAgentMessagePart({
+        displayName: 'Write file',
+        id: 'tool-call-1',
+        providerName: 'write_file',
+        state: 'input-streaming',
+        toolCallId: 'call-1',
+        toolRef: { source: 'builtin', capabilityId: 'write_file' },
+        type: 'tool',
+      }),
+    ).toMatchObject({ state: 'input-streaming', type: 'tool' });
+  });
+
+  test('preserves provider identity behind the closed protocol error code', () => {
+    expect(
+      toAgentErrorView({
+        code: 'access_denied',
+        message: 'OpenAI API error (403): access denied',
+        retryable: false,
+        origin: 'provider',
+        name: 'AI_APICallError',
+        context: {
+          statusCode: 403,
+          providerId: 'openai',
+          modelId: 'gpt-test',
+          responseBody: '{"error":"access_denied"}',
+        },
+      }),
+    ).toEqual({
+      code: 'EXECUTION_FAILED',
+      message: 'OpenAI API error (403): access denied',
+      retryable: false,
+      failure: {
+        version: 1,
+        reasonCode: 'permission',
+        source: { layer: 'provider', name: 'AI_APICallError', code: 'access_denied' },
+        context: {
+          statusCode: 403,
+          providerId: 'openai',
+          modelId: 'gpt-test',
+          responseBody: '{"error":"access_denied"}',
+        },
+      },
+    });
+  });
+});

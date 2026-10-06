@@ -1,0 +1,8 @@
+{
+  "name": "@optimuse/terminal",
+  "version": "0.1.0",
+  "description": "On-device terminal sessions for Optimuse (Android shell sessions, Phase 1)",
+  "main": "index.ts",
+  "license": "UNLICENSED",
+  "private": true
+}

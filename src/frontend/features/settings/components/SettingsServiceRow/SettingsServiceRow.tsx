@@ -1,0 +1,145 @@
+import ChevronRightIcon from '@cherrystudio/app-icons/icons/chevron-right';
+import { Image, Section, Switch, type SwitchProps } from '@cherrystudio/ui/components';
+import { cn } from '@cherrystudio/ui/utils';
+import type { ImageSource } from 'expo-image';
+import { memo, type ReactNode, useState } from 'react';
+import type { AccessibilityProps } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+
+import { SettingsGroupedSeparator } from './SettingsGroupedSeparator';
+
+export type SettingsServiceRowProps = {
+  accessibilityActions?: AccessibilityProps['accessibilityActions'];
+  accessibilityLabel?: string;
+  /** Custom leading visual; takes precedence over `imageSource` when provided. */
+  avatar?: ReactNode;
+  disabled?: boolean;
+  enabledSwitch?: SwitchProps;
+  id: string;
+  hideSeparator?: boolean;
+  imageSource?: ImageSource | number;
+  name: string;
+  /** Inert content beside the name; include its meaning in `accessibilityLabel`. */
+  nameAccessory?: ReactNode;
+  onAccessibilityAction?: AccessibilityProps['onAccessibilityAction'];
+  onPress?: () => void;
+  onPressedChange?: (id: string, isPressed: boolean) => void;
+  /** Draws {@link SettingsGroupedSeparator} above the row. */
+  showSeparator?: boolean;
+  statusLabel?: string;
+  statusTone?: 'danger' | 'default' | 'success';
+  subtitle?: string;
+  testID?: string;
+  trailingAction?: ReactNode;
+};
+
+export const SettingsServiceRow = memo(function SettingsServiceRow({
+  accessibilityActions,
+  accessibilityLabel,
+  avatar,
+  disabled = false,
+  enabledSwitch,
+  hideSeparator = false,
+  id,
+  imageSource,
+  name,
+  nameAccessory,
+  onAccessibilityAction,
+  onPress,
+  onPressedChange,
+  showSeparator = false,
+  statusLabel,
+  statusTone = 'default',
+  subtitle,
+  testID,
+  trailingAction,
+}: SettingsServiceRowProps) {
+  const spokenLabel =
+    accessibilityLabel ?? [name, statusLabel, subtitle].filter(Boolean).join(', ');
+  const [isPressed, setIsPressed] = useState(false);
+
+  return (
+    <View>
+      {showSeparator ? <SettingsGroupedSeparator hidden={hideSeparator || isPressed} /> : null}
+      <Section.Item
+        accessibilityActions={accessibilityActions}
+        accessibilityLabel={spokenLabel}
+        disabled={disabled}
+        description={
+          subtitle ? (
+            <Text className="text-foreground-tertiary text-sm" numberOfLines={1}>
+              {subtitle}
+            </Text>
+          ) : undefined
+        }
+        label={
+          <View className="min-w-0 flex-row items-center gap-2">
+            <Text className="min-w-0 shrink text-base text-foreground" numberOfLines={1}>
+              {name}
+            </Text>
+            {nameAccessory}
+          </View>
+        }
+        leading={
+          avatar ??
+          (imageSource ? (
+            <Image
+              cachePolicy="memory-disk"
+              className="size-5"
+              contentFit="contain"
+              recyclingKey={id}
+              source={imageSource}
+            />
+          ) : null)
+        }
+        onAccessibilityAction={onAccessibilityAction}
+        onPress={onPress}
+        onPressIn={() => {
+          setIsPressed(true);
+          onPressedChange?.(id, true);
+        }}
+        onPressOut={() => {
+          setIsPressed(false);
+          onPressedChange?.(id, false);
+        }}
+        showChevron={false}
+        testID={testID}
+        trailing={
+          <View className="flex-row items-center gap-2">
+            {statusLabel && statusTone === 'success' ? (
+              <View className="shrink-0 items-center justify-center rounded-lg border border-success-border bg-success-subtle px-1.5 py-0.5">
+                <Text
+                  className="font-medium text-success-subtle-foreground text-xs"
+                  numberOfLines={1}
+                  style={styles.statusLabel}
+                >
+                  {statusLabel}
+                </Text>
+              </View>
+            ) : statusLabel ? (
+              <Text
+                className={cn(
+                  'shrink-0 text-xs',
+                  statusTone === 'danger' ? 'text-error' : 'text-foreground',
+                )}
+                numberOfLines={1}
+              >
+                {statusLabel}
+              </Text>
+            ) : null}
+            {enabledSwitch ? <Switch {...enabledSwitch} /> : null}
+            {trailingAction}
+            {onPress ? <ChevronRightIcon className="size-5 text-muted-foreground" /> : null}
+          </View>
+        }
+      />
+    </View>
+  );
+});
+
+const styles = StyleSheet.create({
+  statusLabel: {
+    includeFontPadding: false,
+    textAlignVertical: 'center',
+  },
+});

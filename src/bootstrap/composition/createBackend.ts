@@ -1,0 +1,300 @@
+import { createMMKV } from 'react-native-mmkv';
+
+import { checkChatModel } from '@/backend/ai/agent/modelCheck';
+import type { AgentRuntime } from '@/backend/ai/agent/runtime';
+import {
+  createSystemModelSupport,
+  type LanguageServingSupport,
+} from '@/backend/ai/provider/systemModelSupport';
+import {
+  createMcpServerMutations,
+  type McpServerMutations,
+} from '@/backend/data/api/handlers/mcpServers';
+import type { SystemModelSupportFilter } from '@/backend/data/api/handlers/models';
+import type { PluginCatalogReader } from '@/backend/data/api/handlers/pluginCatalog';
+import type { DbService } from '@/backend/data/db/DbService';
+import { DesktopConnectionService } from '@/backend/data/services/DesktopConnectionService';
+import { FileEntryService } from '@/backend/data/services/FileEntryService';
+import { materializeRemoteModels } from '@/backend/data/services/materializeRemoteModels';
+import { ProviderAccountService } from '@/backend/data/services/ProviderAccountService';
+import { providerRegistryService } from '@/backend/data/services/ProviderRegistryService';
+import { RemoteAgentCommandJournal } from '@/backend/data/services/RemoteAgentCommandJournal';
+import { agentAvatarImages } from '@/backend/services/agents/agentAvatarStorage';
+import {
+  type AgentAvatars,
+  createAgentAvatars,
+} from '@/backend/services/agents/createAgentAvatars';
+import { createAppUpdateModule } from '@/backend/services/appUpdate';
+import type { BackupRuntime } from '@/backend/services/backup';
+import { createPluginsModule, getBuiltInPluginCatalog } from '@/backend/services/builtInMcp';
+import type {
+  DesktopConnectionManager,
+  DesktopConnectionRuntime,
+} from '@/backend/services/desktopConnections';
+import {
+  createDocumentExportDependencies,
+  type DocumentExportRuntime,
+} from '@/backend/services/documentExport';
+import { createUserContentImageStorage } from '@/backend/services/file/userContentImageStorage';
+import { createModelsModule } from '@/backend/services/models/createModelsModule';
+import { createPaintingsModule } from '@/backend/services/paintings/createPaintingsModule';
+import { createProfileModule } from '@/backend/services/profile/createProfileModule';
+import {
+  replaceUserAvatar,
+  resolveUserAvatarUri,
+  USER_AVATAR_IMAGE_CONFIG,
+} from '@/backend/services/profile/userAvatarStorage';
+import {
+  cherryInAccountDefinition,
+  type ProviderAccountRuntime,
+} from '@/backend/services/providers/account';
+import { createProvidersModule } from '@/backend/services/providers/createProvidersModule';
+import {
+  deleteProviderAvatar,
+  getProviderAvatarUri,
+  saveProviderAvatar,
+} from '@/backend/services/providers/providerAvatarStorage';
+import type { ProviderRegistryUpdaterService } from '@/backend/services/providers/ProviderRegistryUpdaterService';
+import { providerRegistryUpdates } from '@/backend/services/providers/providerRegistryUpdates';
+import type { RemoteAgentRuntime, RemoteBackgroundExecution } from '@/backend/services/remoteAgent';
+import { createSystemEntryModule, createSystemShareImporter } from '@/backend/services/systemEntry';
+import type { BackendServices } from '@/bootstrap/composition/createBackendServices';
+import type { Backend } from '@/shared/contracts';
+import type { BackgroundExecutionModule } from '@/shared/contracts/backgroundExecution';
+import { loggerService } from '@/shared/core/logger/LoggerService';
+import type { UniqueModelId } from '@/shared/data/types/model';
+
+export type BackendComposition = {
+  backend: Backend;
+  disposeSystemEntry(): Promise<void>;
+  dataApiDependencies: {
+    agentAvatars: AgentAvatars;
+    mcpServerMutations: McpServerMutations;
+    pluginCatalog: PluginCatalogReader;
+    systemModelSupport: SystemModelSupportFilter;
+  };
+};
+
+export function createBackend(
+  services: BackendServices,
+  infrastructure: {
+    backgroundExecution: BackgroundExecutionModule;
+    remoteBackground: RemoteBackgroundExecution;
+    dbService: DbService;
+    providerAccounts: ProviderAccountRuntime;
+    backup: BackupRuntime;
+    documentExport: DocumentExportRuntime;
+    desktopConnections: DesktopConnectionRuntime;
+    desktopConnectionManager: DesktopConnectionManager;
+    remoteAgent: RemoteAgentRuntime;
+    languageServing: LanguageServingSupport & AgentRuntime;
+    providerRegistryUpdater: Pick<ProviderRegistryUpdaterService, 'applyUpdate' | 'ensureReady'>;
+  },
+): BackendComposition {
+  const { dbService } = infrastructure;
+  infrastructure.providerAccounts.configure(
+    new ProviderAccountService(dbService),
+    [cherryInAccountDefinition],
+    infrastructure.languageServing.providerAccounts,
+  );
+  // Capture this host's database; late work never resolves a replacement host.
+  const exportFiles = new FileEntryService(dbService);
+  infrastructure.remoteAgent.configure({
+    connections: infrastructure.desktopConnectionManager,
+    background: infrastructure.remoteBackground,
+    journal: new RemoteAgentCommandJournal(createMMKV({ id: 'cherry-remote-agent-commands' })),
+  });
+  infrastructure.documentExport.configure(createDocumentExportDependencies(exportFiles));
+  const desktopStore = new DesktopConnectionService(dbService, (provider) =>
+    infrastructure.providerAccounts.getCapabilities(provider),
+  );
+  infrastructure.desktopConnectionManager.configure(desktopStore);
+  infrastructure.desktopConnections.configure(
+    desktopStore,
+    () => infrastructure.providerRegistryUpdater.ensureReady(),
+    infrastructure.desktopConnectionManager,
+  );
+  const { filterModelsSupportedBySystem, isModelSupportedBySystem } = createSystemModelSupport(
+    infrastructure.languageServing,
+  );
+  const systemModelSupport: SystemModelSupportFilter = {
+    filter: async (candidateModels) =>
+      filterModelsSupportedBySystem(candidateModels, await services.provider.list()),
+  };
+  const models = createModelsModule({
+    ai: {
+      listModels: async (input) => {
+        const provider = await services.provider.getByProviderId(input.providerId);
+        const models = await infrastructure.languageServing.listAuthenticatedModels?.(
+          provider,
+          input.requestOptions.signal,
+        );
+        return models ?? services.ai.listModels(input);
+      },
+    },
+    isOAuthSignedIn: async (provider) =>
+      infrastructure.providerAccounts.getCapabilities(provider).flow === 'interactive' &&
+      (await infrastructure.providerAccounts.getStatus(provider.id)).signedIn,
+    checkChatModel: (model, options) =>
+      checkChatModel(infrastructure.languageServing, model, {
+        ...options,
+        onUsage: async (report, requestId) => {
+          try {
+            await services.aiUsageRecord.recordInvocation({
+              completedAt: report.completedAt,
+              context: { ...report.context, messageRef: null, source: null },
+              modality: 'language',
+              requestId,
+              usage: report.usage,
+            });
+          } catch {
+            loggerService
+              .withContext('ModelsModule')
+              .warn('Failed to record chat model check usage');
+          }
+        },
+      }),
+    isSystemSupportedModel: isModelSupportedBySystem,
+    materializeRemoteModels,
+    models: {
+      get: (id) => services.model.getById(id),
+      list: (query) => services.model.list(query),
+      reconcile: async (providerId, input, provider) => {
+        const result = await services.model.reconcileProviderModels(
+          providerId,
+          input,
+          providerConfiguration(provider),
+        );
+        return { ...result, removedIds: result.removedIds as UniqueModelId[] };
+      },
+    },
+    providers: {
+      get: (id) => services.provider.getByProviderId(id),
+      keys: async (id) => (await services.provider.listApiKeys(id)).keys,
+      auth: (id) => services.provider.getAuthConfig(id),
+    },
+  });
+  const paintings = createPaintingsModule({
+    db: { withWriteTx: (fn) => dbService.withWriteTx(fn) },
+    files: services.fileContent,
+    jobs: {
+      cancelGenerate: async (jobId) => {
+        await services.jobRuntime.cancel(jobId);
+      },
+      enqueueGenerateTx: (tx, input, opts) =>
+        services.jobRuntime.enqueueTx(tx, 'painting.generate', input, opts),
+      findActiveGenerateTx: (tx, idempotencyKey) =>
+        services.job.findActiveByIdempotencyKeyTx(tx, idempotencyKey),
+    },
+    paintings: services.painting,
+    getModel: (id) => services.model.getById(id),
+  });
+  const mcpServerMutations = createMcpServerMutations({
+    runtime: services.mcpRuntime,
+    servers: services.mcpServer,
+  });
+  const providers = createProvidersModule({
+    accounts: infrastructure.providerAccounts,
+    hasAvailableModels: async (provider) =>
+      (await services.model.list({ providerId: provider.id, enabled: true })).some((model) =>
+        isModelSupportedBySystem(provider, model),
+      ),
+    avatars: {
+      persist: saveProviderAvatar,
+      remove: deleteProviderAvatar,
+      resolve: getProviderAvatarUri,
+    },
+    catalog: {
+      isExcluded: (providerId) => providerRegistryService.isProviderExcludedFromCatalog(providerId),
+      list: () => providerRegistryService.loadProviders(),
+    },
+    providers: {
+      get: (id) => services.provider.getByProviderId(id),
+      keys: async (id) => (await services.provider.listApiKeys(id)).keys,
+      auth: (id) => services.provider.getAuthConfig(id),
+      enable: (id) => services.provider.update(id, { isEnabled: true }),
+      create: (input) => services.provider.create(input),
+      find: async (providerId) => {
+        const row = await services.provider.getRowByProviderId(providerId);
+        return row ? services.provider.getByProviderId(providerId) : null;
+      },
+      list: () => services.provider.list(),
+    },
+    registryUpdates: {
+      ensureReady: () => infrastructure.providerRegistryUpdater.ensureReady(),
+      apply: () => infrastructure.providerRegistryUpdater.applyUpdate(),
+      subscribe: (listener) => providerRegistryUpdates.subscribe(listener),
+    },
+  });
+  const agentAvatars = createAgentAvatars({
+    agents: services.agentData,
+    images: agentAvatarImages,
+  });
+  const userContentImages = createUserContentImageStorage(USER_AVATAR_IMAGE_CONFIG);
+  const profile = createProfileModule({
+    avatars: {
+      replace: (sourceUri, previousAvatar, persist) =>
+        replaceUserAvatar(userContentImages, sourceUri, previousAvatar, persist),
+      resolve: (avatar) => resolveUserAvatarUri(userContentImages, avatar),
+    },
+    preferences: {
+      readAvatar: () => services.preference.readCached('app.user.avatar'),
+      writeAvatar: (avatar) => services.preference.set('app.user.avatar', avatar),
+    },
+  });
+
+  const systemEntry = createSystemEntryModule({
+    importFiles: createSystemShareImporter(exportFiles),
+  });
+
+  return {
+    disposeSystemEntry: systemEntry.dispose,
+    backend: {
+      appUpdate: createAppUpdateModule(),
+      backgroundExecution: infrastructure.backgroundExecution,
+      backup: infrastructure.backup,
+      systemEntry: systemEntry.module,
+      agent: services.agent,
+      remoteAgent: infrastructure.remoteAgent,
+      desktopConnections: infrastructure.desktopConnections,
+      documentExport: infrastructure.documentExport,
+      file: {
+        createInternalEntry: services.fileContent.createInternalEntry,
+        delete: services.fileContent.delete,
+        prepareAttachments: services.fileContent.prepareAttachments,
+        generatePreviewUri: services.fileContent.generatePreviewUri,
+        getUri: services.fileContent.getUri,
+        resolveUris: services.fileContent.resolveUris,
+        subscribeChanges: services.fileContent.subscribeChanges,
+      },
+      mcp: services.mcpRuntime,
+      models,
+      paintings,
+      permissions: services.devicePermissions,
+      plugins: createPluginsModule(services.mcpRuntime, services.mcpRuntime.pluginAuthorizations),
+      profile,
+      providers,
+      webSearch: services.webSearch,
+    },
+    dataApiDependencies: {
+      agentAvatars,
+      mcpServerMutations,
+      pluginCatalog: getBuiltInPluginCatalog,
+      systemModelSupport,
+    },
+  };
+}
+
+function providerConfiguration(provider: {
+  defaultChatEndpoint?: NonNullable<
+    Parameters<BackendServices['model']['createFromRegistry']>[1]
+  >['defaultChatEndpoint'];
+  presetProviderId?: NonNullable<
+    Parameters<BackendServices['model']['createFromRegistry']>[1]
+  >['presetProviderId'];
+}) {
+  return {
+    defaultChatEndpoint: provider.defaultChatEndpoint,
+    presetProviderId: provider.presetProviderId,
+  };
+}

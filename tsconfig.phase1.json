@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/backend/services/terminal/**/*.ts",
+    "src/backend/ai/agent/tools/terminal/**/*.ts",
+    "src/backend/ai/agent/tools/builtInToolSource.ts",
+    "src/shared/contracts/terminal.ts",
+    "src/shared/data/types/builtInTool.ts",
+    "modules/terminal/index.ts",
+    "modules/terminal/src/Terminal.types.ts",
+    "src/**/*.d.ts",
+    "expo-env.d.ts"
+  ]
+}

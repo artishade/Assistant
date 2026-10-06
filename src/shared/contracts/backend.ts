@@ -1,0 +1,40 @@
+import type { AgentProtocol } from './agent';
+import type { AppUpdateModule } from './appUpdate';
+import type { BackgroundExecutionModule } from './backgroundExecution';
+import type { BackupModule } from './backup';
+import type { DesktopConnectionsModule } from './desktopConnections';
+import type { DocumentExportModule } from './documentExport';
+import type { FileModule } from './file';
+import type { McpModule } from './mcp';
+import type { ModelsModule } from './models';
+import type { PaintingsModule } from './paintings';
+import type { PermissionsModule } from './permissions';
+import type { PluginsModule } from './plugins';
+import type { ProfileModule } from './profile';
+import type { ProvidersModule } from './providers';
+import type { RemoteAgentModule } from './remoteAgent';
+import type { SystemEntryModule } from './systemEntry';
+import type { WebSearchModule } from './webSearch';
+
+export interface Backend {
+  readonly backgroundExecution: BackgroundExecutionModule;
+  readonly appUpdate: AppUpdateModule;
+  readonly backup: BackupModule;
+  readonly systemEntry: SystemEntryModule;
+  readonly agent: AgentProtocol;
+  readonly remoteAgent: RemoteAgentModule;
+  readonly desktopConnections: DesktopConnectionsModule;
+  readonly documentExport: DocumentExportModule;
+  readonly file: FileModule;
+  readonly mcp: McpModule;
+  readonly models: ModelsModule;
+  readonly paintings: PaintingsModule;
+  readonly permissions: PermissionsModule;
+  readonly plugins: PluginsModule;
+  readonly profile: ProfileModule;
+  readonly providers: ProvidersModule;
+  readonly webSearch: WebSearchModule;
+}
+
+export type BackendModuleKey = keyof Backend;
+export type BackendModule<TKey extends BackendModuleKey> = Backend[TKey];

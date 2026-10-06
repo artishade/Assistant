@@ -1,0 +1,868 @@
+# Cherry Agent Runtime
+
+> Status: as-built. Mobile Agent execution is device-local only.
+
+The Agent Runtime is the independent execution boundary behind the Mobile Agent Host. Pi is the
+only local implementation. AI SDK may remain an implementation detail of non-conversation
+model-capability services called through application-owned tools, but it is not an Agent Runtime and
+does not own conversation or tool-loop state.
+
+## Dependency rule
+
+```text
+Mobile Agent Host
+    ↕ Agent Runtime contract
+Pi Runtime
+    ↕ RuntimeTool callback
+Application capability adapter → device / MCP / AI SDK / managed files
+```
+
+The Runtime knows prepared prompts, models, history, tools, input, and normalized execution events.
+It does not know Cherry Agent or Session entities, application commands or snapshots, SQLite,
+Data API, React, Expo, navigation, or UI state.
+
+The Host is the only adapter between the [Agent Protocol](./agent-protocol.md) and the Runtime. It
+loads application data, validates the local execution target, constructs the request, maps events,
+and persists the result.
+
+Runtime independence is enforced by imports and conformance, not by checking the directory name.
+Promotion to a workspace package happens only when a real independent consumer exists.
+
+## Local execution binding
+
+Mobile Agent accepts only the `local` execution target. Application composition injects one Pi
+Runtime directly into the Host. There is no Runtime registry, no implementation-selection Router,
+and no persisted Runtime binding. Agent configuration, Session configuration, model selection, and
+tool availability never select another engine or execution device. The PC Agent Controller
+does not change this local Runtime seam.
+
+PC Agent control does not add a `RemoteRuntime` to this process. A mobile-owned adapter sits
+at the application-protocol boundary, converts PC-owned snapshots and events into Agent Protocol
+values, and leaves execution and authoritative Session state on the PC. The adapter's transport is
+defined separately. The local Host never turns PC tools into `RuntimeTool` callbacks. See
+[Agent Architecture](./README.md#pc-agent-controller-boundary).
+
+The Agent's instructions, model, and MCP bindings, plus application-owned system capabilities, are
+resolved afresh for every turn. After freezing the tool snapshot, the Host combines fixed mobile
+Runtime rules, guidance for application capabilities that are actually present, and the
+user-configured Agent instructions into the prepared application prompt. Runtime adapters consume
+that policy without appending another application policy fragment; Pi appends only the
+binding-specific instructions for its deferred MCP catalog when that catalog is present. Mobile
+Skill persistence and prompt projection are not implemented; their target boundary is documented
+separately and does not change the current Runtime input. The injected Pi Runtime remains stable for
+the Host lifetime.
+
+## Production Pi binding
+
+The composition root binds the `AgentRuntime` registration to Pi and injects it into the Host;
+provider/model resolution enters through an application adapter. The Host never constructs a
+Runtime. The Runtime itself imports neither Expo transport nor application data
+services. Current provider coverage includes API-key-authenticated Anthropic Messages, Google
+Generate Content, OpenAI Chat Completions, and OpenAI Responses endpoints. Unsupported endpoint,
+non-standard adapter family, or authentication types fail before partial execution.
+
+Pi receives the grouped structured transcript, an optional opaque context checkpoint, a frozen tool
+catalog, and Agent inference options on each execution. It maps text, reasoning, tool parts,
+approvals, cancellation, normalized failures, and per-invocation usage onto this contract.
+Before reservation, the Host combines the shared system catalog and the Agent's capability-group
+deny-list with the Agent's persisted, currently executable MCP bindings. It also resolves bounded
+managed images for registry-declared image-capable models supported by the selected Pi endpoint
+adapter, plus bounded UTF-8 managed text as untrusted user content.
+
+The Runtime uses the official `pi-agent-core` exports and Pi AI utility subpaths, pinned together
+at `0.99.1`. Short conversations retain the complete-history path. Long conversations reuse or
+incrementally update a Runtime checkpoint before the first provider turn.
+
+Pi system messages carry instructions and tool declaration changes. The adapter uses Pi's
+transcript helpers to resolve their current values, includes unmeasured changes in request budgets,
+and retains the effective system message when compacting a live loop. `finishTurn` decides whether
+to end before next-turn preparation; reaching the tool budget still allows one final answer.
+Compaction cancellation passes through Pi's execution Context.
+
+When following an upstream release, update both exact package pins, review the upstream changelogs
+and public message/hook/compaction contracts, and rebase both Pi patches onto the published packages.
+The upstream `pi-ai` entry and model catalog reach authentication code with a computed dynamic
+import, which Metro rejects. The `pi-agent-core` patch therefore imports Pi AI through its utility
+subpaths, and the `pi-ai` patch gives the endpoint adapters a local model-runtime module. The `pi-ai`
+patch also disables Bun's Node filesystem fallback, retains structured provider failures, and
+accelerates partial JSON parsing. Jest runs these modules in Node and cannot detect a Metro failure,
+so the patch guard walks the Runtime's Pi module graph. Before removing any remaining patch, review
+that guard and the Runtime regression suites, then bundle the app for a release. Mobile continues to own provider bindings, transport, approvals, application
+budgets, and persistence; adopting upstream releases does not require sharing desktop filesystem
+paths or changing application database fields.
+
+## Descriptor and lifecycle
+
+```ts
+type RuntimeDescriptor = {
+  id: string
+  name: string
+  capabilities: RuntimeCapabilities
+}
+
+type RuntimeCapabilities = {
+  reasoning: boolean
+  tools: boolean
+  approvals: boolean
+  attachments: boolean
+}
+
+interface AgentRuntime {
+  readonly descriptor: RuntimeDescriptor
+  preflightModel(model: RuntimeModel): Promise<RuntimeModelPreflight>
+  open(): Promise<AgentRuntimeSession>
+}
+
+interface AgentRuntimeSession {
+  execute(request: RuntimeExecutionRequest): AsyncIterable<RuntimeEvent>
+  cancel(turnId: string): Promise<void>
+  respondApproval(input: {
+    turnId: string
+    approvalId: string
+    decision: 'approve' | 'deny'
+  }): Promise<void>
+  close(): Promise<void>
+}
+```
+
+Tools may opt in to a bounded input preview through `RuntimeTool.inputPreview`, naming a top-level
+text field and an optional display-name field. Pi coalesces partial input into
+`{ type: 'tool.input.preview', partId, preview: { text, truncated, name? } }` events. These are
+display-only values, independent of `input` and tool execution. The latest preview accompanies the
+tool part for observation recovery and interruption; the full input is published on completion.
+
+`RuntimeModelPreflight` is a narrow, JSON-safe projection of input modalities, context/input/output
+limits, and native tool support. The Host calls it before reservation; provider SDK model objects,
+credentials, endpoints, and headers remain private to the Runtime adapter. Pi preflight and final
+model resolution read the same mobile model/provider services and enforce the same endpoint rules.
+Isolated model probes may supply `apiKeyOverride` to check the user-selected key. The adapter
+materializes and attributes that credential for this request only; ordinary conversation requests
+leave selection inside the adapter. The override never enters transcript or inference snapshots,
+trace attributes, or output events.
+
+Preflight reports the independent input limit, bounded by the total context window, without
+subtracting the model's maximum output capability. The SDK dynamically fits the actual output cap
+to each request's remaining context, keeping 4,096 tokens clear of the window before sizing output.
+Hard admission therefore retains the safety margin plus an output reserve that covers that clamp
+and a usable answer of at least 1,024 tokens; an admitted request is never reduced to a one-token
+response. The compaction reserve (at most 16,384 tokens and 20% of the window) is a soft trigger,
+not a sending limit, and never drops below the admission reserve, so a small window reaches
+compaction before the hard limit rejects it. Output space outside an independent input cap does not
+reduce that input cap again.
+
+Capabilities describe what the engine contract can represent. In particular, `tools: true` means
+Pi can run a tool loop; it does not mean any effective tool will enter the turn. The Host derives
+the effective tools from system and Agent-owned inputs, and the Pi model adapter separately checks
+whether the selected model supports native tool calling.
+
+The Host owns one `AgentRuntimeSession` for each active application Session. The Runtime session may
+hold provider clients and execution-local state, but every `execute` request contains the complete
+normalized context required for that turn.
+
+`cancel` and `close` are required and idempotent. Version 1 permits only one active `execute` call
+per Runtime session.
+
+## Execution input
+
+```ts
+type RuntimeJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | RuntimeJsonValue[]
+  | { [key: string]: RuntimeJsonValue }
+
+type RuntimeToolRef =
+  | { source: 'builtin'; capabilityId: string }
+  | { source: 'mcp'; serverId: string; rawToolName: string }
+
+type RuntimeMessageToolRef = RuntimeToolRef | { source: 'meta'; name: string }
+
+type RuntimeArtifact = {
+  ref: { kind: 'managed-file'; fileEntryId: string }
+  mediaType: string
+  name: string
+  kind: 'created' | 'derived'
+}
+
+type RuntimeToolResult = {
+  value: RuntimeJsonValue
+  artifacts: RuntimeArtifact[]
+  failure?: {
+    error: RuntimeError
+    scope: 'call' | 'tool'
+  }
+}
+
+type RuntimeToolCall = {
+  input: RuntimeJsonValue
+  signal: AbortSignal
+  toolCallId: string
+}
+
+type RuntimeExecutionRequest = {
+  // Used only by isolated model probes; never persisted or included in traces or events.
+  apiKeyOverride?: string
+  turnId: string
+  // Host-prepared application prompt: mobile Runtime rules, App language, and Agent instructions.
+  instructions: string
+  model: RuntimeModel
+  history: RuntimeHistoryTurn[]
+  contextCheckpoint: RuntimeContextCheckpoint | null
+  input: RuntimeInputPart[]
+  // Retained assistant tool-call/result prefix for an explicit manual retry.
+  resume?: RuntimeMessagePart[]
+  tools: RuntimeTool[]
+  options: RuntimeOptions
+  trace?: TraceSpan
+}
+
+type RuntimeModel = {
+  providerId: string
+  modelId: string
+}
+
+type RuntimeOptions = {
+  reasoningEffort?: 'default' | 'none' | 'auto' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  maxOutputTokens?: number
+  temperature?: number
+}
+
+type RuntimeInputPart =
+  | { type: 'text'; text: string }
+  | {
+      type: 'text-attachment'
+      mediaType: string
+      name: string
+      text: string
+      truncated: boolean
+      trust: 'untrusted-user-content'
+    }
+  | RuntimeDocumentAttachmentPart
+  | { type: 'file'; mediaType: string; name?: string; uri: string }
+
+type RuntimeDocumentAttachmentPart = {
+  type: 'document-attachment'
+  fileEntryId: string
+  mediaType: string
+  name: string
+  trust: 'untrusted-user-content'
+  parser: 'anydoc'
+  parserVersion: string
+  totalCharacters: number // Unicode code points in JSON.stringify(original IR)
+  document:
+    | { delivery: 'complete'; result: { status: 'ok'; ir: RuntimeJsonValue; warnings: string[] } }
+    | { delivery: 'deferred' }
+  assetDelivery: { assetRef: string; contentType: string | null; size: number;
+    status: 'sent' | 'model-unsupported' | 'unsupported-type' | 'budget' }[]
+  images: { assetRef: string; mediaType: string; uri: string }[]
+  attachmentReport?: FileAttachmentReport
+}
+```
+
+Runtime implementations receive model/provider dependencies from application composition. They do
+not query Cherry provider or model tables.
+
+`trace` is an optional process-local instrumentation handle from
+`backend/ai/observability`. It provides explicit child spans, bounded metadata attributes, and
+terminal status. Its methods never throw into execution. The Host owns the root and storage;
+Runtime code never resolves a storage service or imports a native tracing SDK. Pi records provider
+requests, including context-compaction requests. Tool and approval timing stay in message runtime
+statistics, and token usage stays in the invocation ledger. MCP owns its connection, catalog, and
+tool-call diagnostics, including work before a turn is admitted. Closing the Host root closes
+unfinished provider records, and late callbacks cannot reopen a settled trace. See
+[AI diagnostic tracing](../../../src/backend/ai/observability/README.md).
+
+The Host preserves the canonical `ReasoningEffortOption` (`default`, `none`, `auto`, `minimal`,
+`low`, `medium`, `high`, `xhigh`, or `max`) in each turn snapshot. An explicit `default` overrides
+the Agent setting; an absent selection also leaves request behavior to the provider. The legacy
+`off` value remains accepted as `none`. Pi rehydrates the selected endpoint's registry reasoning
+profile and translates its emissions at the final request-payload boundary, so model defaults,
+automatic thinking, supported effort tiers, and token budgets retain their distinct meanings.
+
+File input is resolved by the Host before it reaches a Runtime: attachments enter the application's
+file storage first, `AgentInputPart` carries the resulting `fileEntryId`, and the Host validates the
+live entry and managed blob before message reservation. The Host authorizes tools from managed ids
+referenced by the current input and complete Session transcript, while it resolves attachment
+content only for the current input and checkpoint-visible history. A Runtime never reads the device
+filesystem. For supported images, the Host enforces the shared JPEG/PNG/GIF/WebP whitelist and
+10 MiB per file. There is no request-level image count or byte ceiling: every request replays the
+checkpoint-visible history with its images, and Pi prices each image into the context window by the
+endpoint's documented formula (Anthropic, OpenAI, or Gemini) over the dimensions read from the
+image header, falling back to that dialect's typical cost. Compaction folds old images away like any
+other history; a current input that alone exceeds the window fails as a context error before the
+provider call. The Host then reads a
+temporary Data URL after reservation. Cancellation aborts that read boundary and late content is
+discarded. Current image read failure settles the reserved turn; missing historical content is
+omitted while its persisted reference remains.
+
+For text, the Host accepts `text/*` and an explicit application/source-code allowlist cross-checked
+by filename extension. It reads at most 1 MiB per current file before reservation, accepts and strips
+a leading UTF-8 BOM, rejects invalid UTF-8, NUL, and binary controls, then emits at most 200,000
+Unicode code points per file and 400,000 across all model-visible text attachment occurrences. The
+temporary Runtime part keeps body, authoritative metadata, truncation, and the
+`untrusted-user-content` trust label structurally separate. Pi JSON-escapes that part only while
+adapting it to ordinary user message text, so attachment data cannot become system instructions or
+forge its boundary metadata. Pi's current-input/history estimator counts the resulting text
+alongside images, tool schemas, the output reserve, and the safety margin. Exact attachment bodies
+are redacted if a compaction model reproduces them in a persisted checkpoint.
+
+Document attachments use the file module's shared reader with the parser preference frozen before
+turn preparation first yields. That same setting enters the turn's `read_file` callback. The Host
+does not flatten AnyDoc IR into text: the document part keeps the original opaque JSON and admitted
+images, while the persisted user file part receives only its preparation report. Current and
+historical occurrences share the file module's content and image budgets. PDF remains native text;
+switching parsers affects the next turn's reads, not previous messages or persisted tool results.
+
+Pi serializes the complete document envelope once, with the original IR as a nested object, never
+an escaped JSON string. When delivery is deferred, it emits managed-id/offset continuation guidance
+instead of partial JSON. Each admitted image follows a label identifying `fileEntryId` and
+`assetRef`, using the existing image channel. Delivery descriptors stay separate from the IR and
+explain omitted pixels. Runtime validation, context estimates, history replay, error redaction, and
+checkpoint redaction cover document parts as well as text and direct images.
+
+Neither Data URLs, attachment IR, extracted attachment text, nor device URIs enter protocol values, SQLite, snapshots, or
+logs. Tool-side access follows the stricter managed-id ledger in
+[Agent Tools And Controlled Resources](./agent-tools-and-resources.md#controlled-file-ledger).
+
+### History
+
+```ts
+type RuntimeHistoryTurn = {
+  turnId: string | null
+  messages: RuntimeMessage[]
+  replay?: RuntimeTurnReplay
+}
+
+type RuntimeTurnReplay = {
+  version: 1
+  payload: RuntimeJsonValue
+}
+
+type RuntimeMessage = {
+  role: 'user' | 'assistant' | 'system'
+  parts: RuntimeMessagePart[]
+  usage?: RuntimeUsage
+}
+
+type RuntimeMessagePart =
+  | { type: 'text' | 'reasoning'; text: string }
+  | {
+      type: 'text-attachment'
+      mediaType: string
+      name: string
+      text: string
+      truncated: boolean
+      trust: 'untrusted-user-content'
+    }
+  | RuntimeDocumentAttachmentPart
+  | { type: 'file'; mediaType: string; name?: string; uri: string }
+  | {
+      type: 'tool-call'
+      toolCallId: string
+      toolRef: RuntimeMessageToolRef
+      providerName: string
+      input: RuntimeJsonValue
+    }
+  | {
+      type: 'tool-result'
+      toolCallId: string
+      output: RuntimeToolResult
+      isError: boolean
+    }
+
+type RuntimeContextCheckpoint = {
+  version: 1
+  anchorTurnId: string
+  payload: RuntimeJsonValue
+}
+```
+
+The Host converts persisted Cherry messages into normalized history grouped by their durable Turn.
+Successful turns may additionally carry a bounded, versioned `RuntimeTurnReplay`. The Runtime
+decodes this private artifact to recover its original assistant/tool-result sequence, including
+thinking signatures, concurrent tool-call grouping, and model-visible discovery results. It contains
+only the turn's assistant and tool messages, never user attachments, connection credentials, or
+Host session/turn ids. Pi types and decoding stay inside `runtime/pi`; public message views, search,
+and traces do not expose the artifact. Missing, oversized, or unsupported artifacts use normalized
+history, and the Runtime logs why an artifact was dropped or ignored. Original provider/model provenance is retained for cross-model conversion. Usage is rebuilt
+from the Host's current context anchor rather than stale per-request measurements.
+After live tool-loop compaction, the final request's context measurement is not persisted as an
+anchor: the next execution restores the full turn and estimates it before deciding to compact again.
+The optional `replay` field on `completed` carries the artifact to the Host's private MMKV cache,
+written only after the terminal message commits. It survives app restarts without adding a database
+column or entering backups. Each record is limited to 4 MiB; the cache evicts least recently used
+records above 128 entries or 32 MiB of payloads. Only its small index is retained in memory; payloads
+are read on demand for successful assistant rows matching Session, message, and Turn ids. Storage
+failures and eviction fall back to normalized history. Failed, cancelled, and interrupted executions
+do not cache replay. A resumed retry includes its retained prefix.
+Retries and deletions remove obsolete entries. Forks copy available artifacts to the new message/Turn
+ids using the store's committed identity mapping; restored application storage clears the cache.
+Compaction offsets record the replay representation; a mismatched representation retains the summary
+but replays the entire retained turn rather than slicing at an incompatible offset.
+
+The Pi transport honors the provider's `cacheControl.enabled` setting (`none` when disabled,
+otherwise `short`) and receives the stable Host session id. Pi owns cache breakpoint placement;
+AI SDK-specific threshold and last-message-count settings are not applied to this conversation path.
+OpenRouter chat-completion endpoints are recognized by preset identity or the exact `openrouter.ai`
+hostname, including custom provider ids. They opt into OpenRouter session-affinity headers; model ids
+under `anthropic/` also opt into Anthropic cache-control serialization. Other relay endpoints do not
+gain that capability merely because their model name contains Claude.
+
+Rows without a Turn id retain a `null` group id and cannot be checkpoint anchors. Runtime-native
+messages never become the application source of truth. User attachment parts may become Runtime
+file parts; assistant artifact parts remain application-visible managed references and are not
+automatically inlined into model history. Pi accesses their content only through a controlled
+read/inspect tool or after the user explicitly attaches the managed entry again.
+
+Text parts may contain Markdown, but the history is never flattened into one Markdown document.
+Tool calls and results remain structured and paired by `toolCallId`; Pi needs those records to
+continue a tool loop and to reconstruct later turns correctly.
+
+The optional checkpoint is a Runtime-produced context artifact, not Runtime identity or resumable
+session state. The Host does not inspect `payload`; it validates version 1, verifies that
+`anchorTurnId` belongs to the Session, and enforces a 256 KiB serialized payload limit. With a valid
+checkpoint, the request carries complete Turn groups after the anchor. With no checkpoint—or an
+invalid, incompatible, oversized, or orphaned candidate—the Host supplies the entire grouped
+history. Pi owns all later selection, formatting, and compaction policy.
+
+Pi estimates reconstructed history from a measured anchor. When a completed answer's final request
+reported its input, the Host stores that request's total as the message's `stats.contextTokens`:
+everything sent plus the answer. The newest replayed assistant message carries it when the turn uses
+the same model, and `pi-agent-core`'s estimator counts only the content replayed after it. A failed,
+cancelled, or retried answer, a model switch, or a provider that omits input counts leaves no
+anchor, and the whole history is estimated by content. Persisted assistant `usage` sums every
+request of a turn for analytics and is never a context-size measurement. The adapter adds system
+instructions, current input, tool schemas, per-image dialect estimates (replacing Pi's flat image
+charge), and a fixed safety margin before calling Pi's `shouldCompact`; content already covered by
+the anchor is not added again. Historical image estimates follow the checkpoint-projected history;
+they are removable history costs, not part of the current input's fixed cost. A current input whose
+fixed costs exceed the hard budget fails before the first model call. Crossing the compaction
+trigger alone never proves that a request cannot be sent.
+
+On compaction, Pi owns the cut point, `previousSummary` merge, retained tail, and split-turn prefix
+summary. Checkpoint payloads store the redacted summary and an optional structural resume cursor;
+they do not duplicate attachment bodies or raw retained tool results. Anchors remain complete
+durable Turns. A split-turn cursor reconstructs the retained suffix from the Host-supplied complete
+Turn so tool calls and results remain paired after restart. Summary calls reuse the current model
+transport, credentials, timeout, and cancellation signal, and emit separate invocation usage reports attributed to the active Turn.
+
+If automatic compaction fails, cannot prepare a summary, or produces a summary that does not fit,
+the Runtime keeps the original projected context when it still fits the hard budget. It emits no
+checkpoint for that fallback. Cancellation still ends the turn, and oversized original context is
+never sent merely because compaction failed.
+
+Initial compaction is not the last admission check. Before Pi continues after a tool batch, the
+Runtime applies the same soft compaction trigger, summarizes the older context, and retains the
+recent tool-call/result pairs. It replaces Pi's next context without replaying any tool. Each batch
+gets at most one compaction attempt; failure falls back only when the original context still fits.
+The retained tail is sent verbatim, so when it alone exceeds the input budget the Runtime fails with
+`context_window_exceeded` without requesting a summary.
+Loop summaries are execution-local: they do not create durable replay cursors into the active turn,
+whose model-only tool messages differ from the persisted application transcript. The next fresh
+turn reconstructs from the last durable preflight checkpoint and the complete transcript tail.
+
+Pi's default message conversion drops `compactionSummary` messages. The Runtime installs its own
+conversion so every summary, preflight or in-loop, reaches the provider as the opening user message;
+a compacted request never starts with an assistant message.
+
+`context.compaction` carries a turn-local `id`, `phase` (`preflight` or
+`tool-loop`), `status` (`running`, `completed`, `failed`, or `cancelled`), `startedAt`, optional
+`completedAt`, `inputTokensBefore`, optional `inputTokensAfter`, and an optional closed `reason`
+(`summary-failed`, `insufficient-reduction`, or `cancelled`). The event never exposes summary text,
+and request-context measurements stay inside the Runtime until a consumer needs them.
+The Host projects compaction into ordered `data-compaction-anchor` parts using Desktop field names and ISO timestamps. Runtime `running` maps
+to `compacting`, `completed` to `done`, and failed/cancelled attempts to `skipped`. Only completed
+anchors are persisted; summaries and detailed failure reasons stay behind the Runtime boundary.
+
+Content estimates retain Pi's ASCII heuristic and reserve two tokens per non-ASCII code point,
+including system instructions and tool schemas. This is a conservative multilingual heuristic,
+not a model tokenizer or a guarantee against provider-side overflow. The provider request boundary
+also checks this input budget and clamps the requested output to the remaining total window minus
+4,096 tokens, respecting both the caller's cap and the model's maximum output capability.
+Within a live loop, the Runtime uses the latest valid provider usage plus subsequent messages
+when available. That usage
+already covers the old system prompt, tool schemas, and images; only unmeasured images and newly
+introduced tool definitions receive additional reserves. Without valid usage, those costs are
+estimated from content. A continuation that no longer fits the hard budget stops as
+`context_window_exceeded` before another provider request. Model-only catalog results additionally
+consume this live headroom while they are produced. At assistant response completion, only the new
+response content is deducted; that request's input was already budgeted before execution.
+
+### Tools
+
+```ts
+type RuntimeTool = {
+  ref: RuntimeToolRef
+  providerName: string
+  displayName: string
+  description: string
+  inputSchema: RuntimeJsonValue
+  approval: 'auto' | 'ask' | 'deny'
+  failureGroup?: string
+  execute(call: RuntimeToolCall): Promise<RuntimeToolResult>
+}
+```
+
+`ref` is the stable application identity used by approval and audit, and by MCP persistence.
+`providerName` is the deterministic catalog alias by which a Runtime identifies the tool. A Runtime
+may expose that alias as a direct model function or as the exact target name accepted by a private
+model-binding tool; that encoding never changes the tool's `ref`, approval, input, or persisted
+identity. `displayName` is a historical UI snapshot. `inputSchema` is portable JSON Schema, not a
+provider-native schema object.
+
+The Host supplies an immutable tool snapshot after applying the system catalog, the Agent's
+capability-group deny-list, current Agent MCP configuration, platform availability, system
+permissions, and application policy. Changes during execution apply to the next turn, not the active one. A Runtime
+validates tool input, enforces the approval mode, and invokes `execute` only after approval when the
+mode is `ask`.
+
+`tools: []` is a complete and valid request: Pi performs ordinary conversation and the Host must not
+leave stale tool instructions in the prompt. A non-empty snapshot enables Pi's model → tool → result
+→ model loop. A call to a name absent from the snapshot fails closed with a normalized unavailable
+tool result; a Runtime never looks up and executes an arbitrary application tool dynamically.
+
+Tool configuration, OS permission, and execution approval are separate gates. A configured tool is
+not automatically approved. If the snapshot is non-empty but the selected model cannot call tools,
+the Host rejects admission before reserving messages; Pi repeats the check before execution as a
+defensive boundary instead of silently degrading to prompt-encoded pseudo calls.
+
+When a tool call is denied — approval mode `deny`, or an `ask` approval resolved as deny — the
+Runtime never invokes `execute`. It reports the tool part as `denied`, persists
+`{ "value": { "status": "denied", "reason": "..." }, "artifacts": [] }` as its output, and
+returns that envelope to the model as the call's result, so the loop continues without the tool
+running. This feedback shape is a cross-implementation rule.
+
+Runtime-generated failures use the same outer envelope. An `error` result uses
+`value: { status: 'error', error: { code, message, retryable } }`; an `interrupted` result uses
+`value: { status: 'interrupted', reason: '...' }`; both use `artifacts: []`. Startup reconciliation
+uses that interrupted shape as well. Native errors, stack traces, and late callback results never
+enter these envelopes.
+
+Application callbacks may return a trusted outer `failure` alongside their model-facing `value`.
+The Runtime marks that call as `error` and passes an error tool result to the model. `scope: 'call'`
+leaves the tool available for corrected input. `scope: 'tool'` stops further calls to that tool in
+this execution. Tools with the same optional `failureGroup` stop together: web search and page
+reading share `web`, so a failed lookup cannot trigger a different web strategy. The Runtime
+removes stopped tools while other tools remain available and does not invoke their callbacks again.
+If all tools stop, their definitions remain for valid tool history, but tool choice is forced to
+`none` (Google: `NONE`) so the model can answer without further calls.
+Already running calls may finish and contribute results. Other tools and the final assistant
+response remain available; a new execution starts with the Host's full snapshot. This policy is
+independent of the JSON inside `value`: remote payloads and historical results cannot disable
+capabilities.
+
+The Host projects callback failures into the protocol's error result envelope, retaining the
+callback's `value` in `value.details`. Runtime-only failure policy is not persisted. Partial web
+results therefore remain available in history and as citation sources alongside the error.
+
+Pi permits at most twenty tool-loop steps and sixty-four tool calls per turn. Calls beyond the limit
+do not execute their callback and receive a classified error result. After the current batch settles,
+reaching either limit disables tool selection and allows one final model response using the collected
+results, with instructions to disclose uncertainty and unfinished work. A successful final response
+completes the turn; further tool requests fail with the budget error. Tool definitions remain in the
+request to keep tool history valid; the final provider payload forces tool choice to `none` (Google:
+`NONE`). Context exhaustion still stops before another provider request.
+
+A turn has no wall-clock deadline. Long generations, such as writing a large file through a tool, are
+legitimate progress, and the step and call budgets already bound runaway tool loops. A turn ends only
+by completing, failing, or being cancelled; cancellation aborts the model, approval waiters, and the
+callback signal before terminalizing live tool parts. Bounded waits belong to the operations that can
+stall: each model request shares a 120-second waiting budget across all API-key attempts. Switching
+keys or receiving stream-start or empty text/thinking events does not reset it; content events
+reset the idle timer, so ongoing generation can continue. Expiry fails the request and aborts its active transport. Every
+request settles on cancellation, source failure, or premature stream closure, even when the source
+ignores abort. Tool execution is outside this timer, and the next model request starts a fresh
+budget. Streamable HTTP MCP callbacks add their own 60-second invocation bound.
+
+Tool callbacks and `AbortSignal` are allowed here because the Runtime contract is process-local.
+They never cross the JSON-safe application protocol.
+
+A callback may close over a narrow application capability service. This is how Streamable HTTP MCP,
+device capabilities, web access, image generation, and managed-file operations reach Pi without Pi
+importing application or provider SDK modules. Image generation may use `AiService`,
+`@cherrystudio/ai-core`, or AI SDK behind that callback; those dependencies still do not own the
+conversation or tool loop. The current inventory lives in
+[Agent Tools And Controlled Resources](./agent-tools-and-resources.md).
+
+Every callback returns `RuntimeToolResult`. A non-artifact tool returns `artifacts: []`; an MCP
+adapter wraps the remote payload in `value` and never interprets its shape as an artifact envelope.
+A file-producing application capability creates and validates each managed entry before returning
+its artifact ref. The Pi adapter gives the model the typed outer envelope, including bounded managed
+refs but never artifact bytes, and also emits the artifacts as Runtime file parts for Host
+projection. This preserves same-turn follow-up access without treating assistant artifact parts as
+later model attachments. See
+[Agent Tools And Controlled Resources](./agent-tools-and-resources.md#tool-results-and-artifacts).
+Absolute paths and large base64 payloads are never tool results.
+
+Mobile Skills are not resolved by the current Host. Their target contract keeps them as instruction
+context that cannot change the tool snapshot, approval policy, OS permission, or turn resource
+ledger. See [Agent Skills](./agent-skills.md).
+
+## Execution output
+
+```ts
+type RuntimeEvent =
+  | { type: 'part.add'; index: number; part: RuntimeOutputPart }
+  | { type: 'text.delta'; partId: string; text: string }
+  | { type: 'part.replace'; part: RuntimeOutputPart }
+  | { type: 'approval.requested'; approval: RuntimeApproval }
+  | { type: 'approval.resolved'; approval: RuntimeApproval }
+  | { type: 'context.checkpoint'; checkpoint: RuntimeContextCheckpoint }
+  | { type: 'context.compaction'; compaction: RuntimeContextCompaction }
+  | {
+      type: 'usage'
+      requestId: string
+      usage: RuntimeUsage
+      context: RuntimeUsageContext
+      completedAt: number
+    }
+  | { type: 'completed'; contextTokens?: number; replay?: RuntimeTurnReplay }
+  | { type: 'failed'; error: RuntimeError }
+  | { type: 'cancelled' }
+
+type RuntimeOutputPart =
+  | {
+      id: string
+      type: 'text' | 'reasoning'
+      text: string
+      state: 'streaming' | 'done'
+    }
+  | {
+      id: string
+      type: 'file'
+      ref: { kind: 'managed-file'; fileEntryId: string }
+      mediaType: string
+      name: string
+      purpose: 'artifact'
+    }
+  | {
+      id: string
+      type: 'tool'
+      toolCallId: string
+      toolRef: RuntimeMessageToolRef
+      providerName: string
+      displayName: string
+      state:
+        | 'input-streaming'
+        | 'input-available'
+        | 'awaiting-approval'
+        | 'running'
+        | 'output-available'
+        | 'denied'
+        | 'error'
+        | 'interrupted'
+      input?: RuntimeJsonValue
+      output?: RuntimeToolResult
+      approvalId?: string
+      error?: RuntimeError
+    }
+
+type RuntimeApproval = {
+  id: string
+  turnId: string
+  toolCallId: string
+  toolRef: RuntimeToolRef
+  displayName: string
+  input: RuntimeJsonValue
+  status: 'pending' | 'approved' | 'denied'
+}
+
+type RuntimeUsage = {
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  reasoningTokens?: number
+  noCacheTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+}
+
+type RuntimeUsageContext = {
+  providerId: string
+  providerName: string | null
+  modelId: string
+  modelName: string | null
+  pricingSnapshot: AiUsagePricingSnapshot | null
+  trustProviderReportedCost: boolean
+  reportedCostCurrency: Currency | null
+  credentialReceipt: ServingCredentialReceipt
+}
+
+type RuntimeError = {
+  code: string
+  message: string
+  retryable: boolean
+  origin?: 'provider' | 'runtime' | 'host' | 'tool'
+  name?: string
+  context?: {
+    statusCode?: number
+    providerId?: string
+    modelId?: string
+    finishReason?: string
+    responseBody?: string
+  }
+}
+```
+
+`input-streaming` is a lifecycle signal: the provider has started a tool call, but its arguments are
+not complete or safe to execute. A Runtime may omit `input` in that state. Pi publishes the state at
+`toolcall_start`, keeps provider argument deltas inside the adapter to avoid repeatedly projecting a
+growing payload, and replaces the part with `input-available` plus the complete JSON-safe input at
+`toolcall_end`.
+
+`RuntimeToolRef` identifies an executable application capability and remains the only ref accepted
+by execution requests and approvals. `RuntimeMessageToolRef` additionally admits `meta` activity
+such as catalog search: it is observable and replayable model-loop history, but it is not executable
+through the Host capability catalog and never appears in an inference tool snapshot.
+
+Every execution emits exactly one terminal event: `completed`, `failed`, or `cancelled`. Before a
+terminal event, the Runtime settles every live tool part: denial includes the canonical denial
+output envelope, tool failure includes a normalized error result envelope, and cancellation replaces
+unfinished tool parts with `interrupted` and a normalized result envelope. No event may follow the
+terminal event. Runtime-native errors are normalized and must not expose credentials or stack
+traces. `code` and `name` retain the source identity when it is available; `context` is an
+allowlisted, bounded snapshot. Messages and response bodies are credential-redacted before they
+cross the Runtime boundary. Request bodies, URLs, headers, and stacks are never included.
+
+Supported Pi Provider adapters attach a terminal diagnostic at the SDK catch boundary before the
+assistant error reaches the Runtime. That diagnostic preserves only the original error identity,
+HTTP status, bounded response body, and explicit retryability. The Runtime ignores diagnostics from
+recovered transport attempts, then redacts and projects the terminal diagnostic into `RuntimeError`.
+This keeps the original terminal failure distinct from an earlier WebSocket or stream fallback.
+
+A `context.checkpoint` event is non-terminal. The Host retains only the latest valid candidate from
+the active execution and commits it atomically with a successful assistant terminal result. Failed,
+cancelled, or interrupted turns never persist a candidate, and oversized payloads are rejected
+rather than truncated.
+
+Each `usage` event describes one successful provider invocation, including compaction calls.
+`requestId` is stable for redelivery and unique across distinct calls. Pi captures assistant responses
+at the provider stream result, before `message_end`, tool execution, or approval, and reports
+compaction at its completion boundary. Cancelling after the provider result does not erase a
+completed call. As in desktop Pi accounting, error/aborted responses are excluded even if the provider
+bills partial output; partial usage is not estimated.
+Detailed cache and reasoning counts remain available for pricing. `context` freezes provider,
+pricing, and credential attribution before execution; the served model is taken from the response
+when available. `completedAt` is recorded at the provider boundary.
+
+The Host adds the admitted Agent source and reserved Session message reference, deduplicates reports,
+and starts an analytical write per invocation. Like snapshot writes, that write never blocks the
+event loop; the terminal write waits for the Host's tracked Runtime usage writes, so the finalized
+row carries those persisted calls. `AiUsageRecordService` inserts the fact and rebuilds message
+`stats` and protocol `usage` in the same transaction. The Host retains an aggregate for its in-memory
+message view and uses it at finalization only when no analytical projection was persisted. If some writes fail,
+an existing projection continues to reflect only persisted records. Tools that call providers on
+the Host's behalf (image generation) read the attribution when they run, because the tool catalog
+is built before the assistant message is reserved; source and bound message references remain
+immutable snapshots. Their independent usage writes can finish after message finalization,
+especially after cancellation. A usage write that updates a terminal message publishes its Session
+transcript path after commit, so mounted chat views also receive the late projection.
+Runtime and approval timing remain message-owned; they never stand in for provider latency. A
+Runtime that cannot report usage emits no `usage` event.
+
+## Host execution flow
+
+1. The Host validates that the Session is idle.
+2. It validates that the Session target is `local`, resolves the current Agent, public model facts,
+   the latest checkpoint candidate, its Store-loaded history tail, and lightweight authorization
+   indexes, then creates the turn resource ledger. Invalid candidates load the full history.
+3. It freezes the immutable tool catalog against that ledger and builds the versioned,
+   credential-free inference snapshot from the same model, options, and tools sent to the Runtime.
+4. It preflights attachments and opens the injected Pi Runtime Session. Only after that succeeds
+   does it atomically persist the user message and assistant placeholder with the selected model id
+   and inference snapshot.
+5. The Host normalizes instructions, model, grouped structured history after the checkpoint anchor,
+   the immutable tool snapshot, input, and options.
+6. The selected Runtime executes the prepared request.
+7. The Host maps Runtime parts, approvals, usage, and terminal events into Agent Protocol state.
+8. Terminal message and turn state commit before the Host publishes terminal protocol events. A
+   transient terminal-write failure retries the same outcome; a persistently unwritable store makes
+   that Host generation reject new submissions and leaves startup reconciliation to settle the
+   durable placeholder.
+
+The Runtime never writes application storage. The Host never interprets Pi-native events outside
+the Pi implementation.
+
+## Execution lifetime
+
+Route unmount does not own or cancel execution; the app-owned Host and Runtime session do. A
+foreground transition creates a fresh protocol observation from the Host snapshot.
+
+Host shutdown closes submission admission before aborting both in-flight admission work and active
+turns. Attachment reads and automatic naming generation inherit the same lifecycle cancellation
+boundary; shutdown joins admissions before closing Runtime Sessions.
+
+Local execution depends on the Mobile JavaScript process. If the process is suspended or killed and
+the turn cannot reach a terminal event, startup reconciliation marks the persisted placeholder and
+turn as interrupted and terminalizes every non-terminal persisted tool part as `interrupted`.
+There is no automatic process resumption or background-execution guarantee. Manual answer retry
+starts a fresh execution with an optional `resume` prefix. Pi adds the original user input and
+retained assistant tool-call/result pairs to its initial context and calls `continue()`; replayed
+parts do not emit output events or execute tools. This current-turn prefix participates in context
+admission and is never summarized away as completed history. `resume` carries only model-visible
+parts, so a retained prefix that projects to nothing — an assistant artifact is never replayed —
+is sent as a plain restart rather than an empty continuation.
+
+History projection never sends an unanswered approval or another dangling tool call to Pi. A
+persisted `denied`, `error`, or `interrupted` tool part contributes its paired normalized tool result;
+an abandoned incomplete call without a durable result is omitted as a whole. This follows the PC
+Agent invariant while keeping Mobile Version 1 non-resumable.
+
+Context checkpoint replay also does not make a turn resumable. A restart interrupts active work as
+before; only a checkpoint already committed with a successful assistant row may affect a later
+fresh execution. The full transcript remains untouched and is the fallback when checkpoint
+validation fails.
+
+## Conformance
+
+Every Runtime implementation passes the same suite:
+
+1. Descriptor id and capabilities are stable.
+2. A valid request reaches exactly one terminal event.
+3. No output follows a terminal event.
+4. Text deltas and part replacements address existing stable part ids.
+5. Unsupported input or tools fail before partial execution.
+6. `cancel` is idempotent and causes the active turn to settle as cancelled.
+7. Approval is requested only for an `ask` tool and correlates to the active turn and tool call.
+8. Denied tools are never executed and still produce a paired canonical result.
+9. `close` is idempotent and releases provider, iterator, and tool resources.
+10. Native errors are normalized without secrets or stack traces.
+11. The implementation imports no application protocol, persistence, React, or Expo module.
+12. Tool refs remain stable when display names or provider aliases change.
+13. Artifact output contains validated managed refs, never absolute paths or unbounded inline bytes.
+14. Cancellation and startup recovery leave no non-terminal tool part or dangling model-history call.
+15. Skills cannot become executable capabilities or expand a turn's tool snapshot or resource ledger.
+16. Image preflight happens before reservation, and Runtime image payloads contain only bounded,
+    request-local managed content accepted by the model and endpoint.
+17. Tool-step and tool-call budgets stop new tool execution and allow one response with tools disabled;
+    context and callback limits retain classified failure outcomes.
+18. History is grouped by durable Turn id, and flattening it without a checkpoint preserves the
+    previous complete-history model input.
+19. Checkpoint events round-trip as JSON; only successful terminals persist a valid bounded
+    candidate, and invalid replay candidates fall back to full history.
+20. Short history does not summarize; compacted history replays summary plus retained complete-Turn
+    context, preserves tool pairs across split turns, and accounts summary usage in the active Turn.
+
+The production conformance target is the Pi Runtime. A fake Runtime exercises Host behavior without
+Pi or a provider connection.
+
+## Direct Image Model Turns
+
+When the selected Agent model generates images, the Host prepares a direct image request through
+`agentImageGeneration` before reserving the ordinary Session and message rows. This path validates
+managed image inputs and registry mode support, captures image parameters in the inference snapshot,
+and skips text-model preflight, tool discovery, and opening a Pi session. Pi remains the text engine.
+
+The image capability calls `AiService.generateImage` with the Agent instructions, current prompt,
+explicit reference attachments, and the reserved assistant message's usage attribution. It imports
+outputs as managed generated files, then the Host persists them as assistant artifact parts using
+its usual cancellation, background reply, naming, and terminal-state flow. A ten-minute request
+limit bounds provider work; failures and cancellation discard files not yet returned to the Host.
+No painting history row or painting job is created. The image composer exposes the latest successful
+image as an editable reference: a single output is selected automatically, while multiple outputs
+require a choice. Clearing image inputs starts a new image. The selected reference and manual
+attachments are deduplicated and submitted as explicit current-input file parts; the Host does not
+infer image inputs from history. The reference
+stays separate from the text draft and is not attached when switching to a text model.

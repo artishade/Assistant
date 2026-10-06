@@ -1,0 +1,106 @@
+import BellIcon from '@cherrystudio/app-icons/icons/bell';
+import CloudIcon from '@cherrystudio/app-icons/icons/cloud';
+import DatabaseIcon from '@cherrystudio/app-icons/icons/database';
+import InfoIcon from '@cherrystudio/app-icons/icons/info';
+import LockIcon from '@cherrystudio/app-icons/icons/lock';
+import NetworkIcon from '@cherrystudio/app-icons/icons/network';
+import PackageIcon from '@cherrystudio/app-icons/icons/package';
+import Settings2Icon from '@cherrystudio/app-icons/icons/settings-2';
+import ShieldIcon from '@cherrystudio/app-icons/icons/shield';
+import { Section } from '@cherrystudio/ui/components';
+import { useRouter } from 'expo-router';
+import { useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Platform, ScrollView, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { RouteHeader } from '@/frontend/appShell/header';
+import { usePreference } from '@/frontend/data/hooks';
+
+import { ProfileHero } from './components/ProfileHero';
+import { useProviderListNavigation } from './provider';
+
+export default function SettingsScreen() {
+  const { t } = useTranslation();
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const [userName] = usePreference('app.user.name');
+  const { openProviderList, prepareProviderList } = useProviderListNavigation();
+
+  const openProfileSettings = useCallback(() => {
+    router.push('/settings/profile');
+  }, [router]);
+  const contentContainerStyle = useMemo(() => ({ paddingBottom: insets.bottom }), [insets.bottom]);
+
+  return (
+    <View className="flex-1">
+      <RouteHeader />
+      <ScrollView
+        alwaysBounceVertical={false}
+        contentContainerStyle={contentContainerStyle}
+        contentInsetAdjustmentBehavior="automatic"
+        showsVerticalScrollIndicator={false}
+      >
+        <ProfileHero onPress={openProfileSettings} userName={userName} />
+        <View className="gap-6 px-4 pt-2">
+          <Section>
+            <Section.Item
+              label={t('settings.items.modelService')}
+              leading={<CloudIcon className="size-4 text-foreground" />}
+              onPress={openProviderList}
+              onPressIn={prepareProviderList}
+            />
+            <Section.Item
+              label={t('settings.items.defaultModel')}
+              leading={<PackageIcon className="size-4 text-foreground" />}
+              onPress={() => router.push('/settings/model')}
+            />
+          </Section>
+          <Section>
+            <Section.Item
+              label={t('settings.general.title')}
+              leading={<Settings2Icon className="size-4 text-foreground" />}
+              onPress={() => router.push('/settings/appearance')}
+              testID="settings-general"
+            />
+            {Platform.OS === 'ios' || Platform.OS === 'android' ? (
+              <Section.Item
+                label={t('settings.items.notifications')}
+                leading={<BellIcon className="size-4 text-foreground" />}
+                onPress={() => router.push('/settings/notifications')}
+              />
+            ) : null}
+            <Section.Item
+              label={t('settings.items.permissions')}
+              leading={<LockIcon className="size-4 text-foreground" />}
+              onPress={() => router.push('/settings/permissions')}
+            />
+            <Section.Item
+              label={t('settings.items.deviceConnections')}
+              leading={<NetworkIcon className="size-4 text-foreground" />}
+              onPress={() => router.push('/settings/device-connections')}
+            />
+          </Section>
+          <Section>
+            <Section.Item
+              label={t('backup.title')}
+              leading={<DatabaseIcon className="size-4 text-foreground" />}
+              onPress={() => router.push('/settings/backup')}
+              testID="settings-backup"
+            />
+            <Section.Item
+              label={t('settings.privacy.title')}
+              leading={<ShieldIcon className="size-4 text-foreground" />}
+              onPress={() => router.push('/settings/privacy')}
+            />
+            <Section.Item
+              label={t('settings.items.aboutUs')}
+              leading={<InfoIcon className="size-4 text-foreground" />}
+              onPress={() => router.push('/settings/about')}
+            />
+          </Section>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}

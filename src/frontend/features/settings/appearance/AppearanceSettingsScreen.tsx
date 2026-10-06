@@ -1,0 +1,95 @@
+import ChevronRightIcon from '@cherrystudio/app-icons/icons/chevron-right';
+import { OptionPickerBottomSheet, Section, useToast } from '@cherrystudio/ui/components';
+import { normalizeFontSizeStep } from '@cherrystudio/ui/utils';
+import { useRouter } from 'expo-router';
+import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Text, View } from 'react-native';
+
+import { usePreference } from '@/frontend/data/hooks';
+
+import { SettingsScrollPage } from '../components/SettingsScrollPage';
+import { useSettingPreferences } from '../hooks/useSettingPreferences';
+import { FONT_SIZE_STEP_LABEL_KEYS } from '../utils/fontSizeOptions';
+import { DocumentParserSetting } from './components/DocumentParserSetting';
+import { ThemePreviewSelector } from './components/ThemePreviewSelector';
+
+export default function AppearanceSettingsScreen() {
+  const { t } = useTranslation();
+  const { toast } = useToast();
+  const router = useRouter();
+  const [isLanguagePickerOpen, setIsLanguagePickerOpen] = useState(false);
+  const [fontSizeStep] = usePreference('ui.font_size_step');
+  const [isWatermarkEnabled, setIsWatermarkEnabled] = usePreference(
+    'file.export.watermark_enabled',
+  );
+  const normalizedFontSizeStep = normalizeFontSizeStep(fontSizeStep);
+  const settingPreferences = useSettingPreferences();
+  const languageLabel = settingPreferences.language.options.find(
+    (option) => option.value === settingPreferences.language.value,
+  )?.label;
+
+  const changeWatermark = (value: boolean) => {
+    void setIsWatermarkEnabled(value).catch(() => {
+      toast.show({ label: t('settings.exportWatermark.saveFailed'), variant: 'danger' });
+    });
+  };
+
+  return (
+    <>
+      <SettingsScrollPage
+        contentClassName="gap-6"
+        headerProps={{ title: t('settings.general.title') }}
+      >
+        <Section title={t('settings.items.theme')}>
+          <Section.Item testID="theme-preview-section-item">
+            <ThemePreviewSelector
+              onThemeChange={settingPreferences.theme.onValueChange}
+              selectedTheme={settingPreferences.theme.value}
+            />
+          </Section.Item>
+        </Section>
+
+        <Section>
+          <Section.SelectItem
+            label={t('settings.items.appLanguage')}
+            onPress={() => setIsLanguagePickerOpen(true)}
+            value={languageLabel ?? t('settings.select.placeholder')}
+          />
+          <Section.Item
+            label={t('settings.items.fontSize')}
+            onPress={() => router.push('/settings/font-size')}
+            trailing={
+              <View className="flex-row items-center gap-1">
+                <Text className="text-right text-base text-foreground">
+                  {t(FONT_SIZE_STEP_LABEL_KEYS[normalizedFontSizeStep])}
+                </Text>
+                <ChevronRightIcon className="size-5 text-muted-foreground" />
+              </View>
+            }
+          />
+        </Section>
+
+        <Section>
+          <Section.SwitchItem
+            label={t('settings.exportWatermark.title')}
+            onValueChange={changeWatermark}
+            testID="settings-export-watermark"
+            value={isWatermarkEnabled}
+          />
+          <DocumentParserSetting />
+        </Section>
+      </SettingsScrollPage>
+      <OptionPickerBottomSheet
+        onClose={() => setIsLanguagePickerOpen(false)}
+        onValueChange={settingPreferences.language.onValueChange}
+        open={isLanguagePickerOpen}
+        options={settingPreferences.language.options}
+        selectedValue={settingPreferences.language.value}
+        size="large"
+        testID="language-picker"
+        title={t('settings.items.appLanguage')}
+      />
+    </>
+  );
+}

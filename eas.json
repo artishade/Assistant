@@ -1,0 +1,82 @@
+{
+  "cli": {
+    "version": ">= 16.3.2",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "environment": "development",
+      "developmentClient": true,
+      "distribution": "internal",
+      "node": "24.19.0",
+      "pnpm": "12.2.1",
+      "env": {
+        "PROFILE": "development"
+      },
+      "android": {
+        "buildType": "apk",
+        "withoutCredentials": true,
+        "gradleCommand": ":app:assembleDebug -PreactNativeArchitectures=arm64-v8a"
+      }
+    },
+    "development-simulator": {
+      "extends": "development",
+      "ios": {
+        "simulator": true,
+        "buildConfiguration": "Debug"
+      },
+      "env": {
+        "GYM_XCARGS": "ARCHS=arm64"
+      }
+    },
+    "preview": {
+      "environment": "preview",
+      "distribution": "internal",
+      "node": "24.19.0",
+      "pnpm": "12.2.1",
+      "env": {
+        "PROFILE": "preview"
+      },
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease -PreactNativeArchitectures=arm64-v8a -Dorg.gradle.jvmargs=-Xmx4096m"
+      },
+      "ios": {}
+    },
+    "production": {
+      "environment": "production",
+      "autoIncrement": true,
+      "channel": "production",
+      "node": "24.19.0",
+      "pnpm": "12.2.1",
+      "env": {
+        "PROFILE": "production",
+        "APK_UPDATES_ENABLED": "true"
+      },
+      "android": {
+        "buildType": "apk",
+        "withoutCredentials": false,
+        "credentialsSource": "remote",
+        "gradleCommand": ":app:assembleRelease -PreactNativeArchitectures=arm64-v8a -Dorg.gradle.jvmargs=-Xmx4096m"
+      }
+    },
+    "production-google-play": {
+      "extends": "production",
+      "env": {
+        "APK_UPDATES_ENABLED": "false",
+        "ANDROID_COMPRESS_NATIVE_LIBS": "false"
+      },
+      "android": {
+        "buildType": "app-bundle",
+        "gradleCommand": ":app:bundleRelease -PreactNativeArchitectures=arm64-v8a -Dorg.gradle.jvmargs=-Xmx4096m"
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "ascAppId": "6809783714"
+      }
+    }
+  }
+}

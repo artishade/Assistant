@@ -1,0 +1,59 @@
+import type { KeepAliveLease } from '@/backend/services/keepAlive/KeepAliveCoordinator';
+import type {
+  BackgroundReplyContent,
+  BackgroundReplyPhase,
+} from '@/shared/backgroundActivity/chatReply';
+import type { AgentMessageView } from '@/shared/contracts/agent';
+
+// The feature contract lives in shared so the service and activity
+// registration agree on props; these re-exports keep the service-local import
+// surface stable.
+export type {
+  BackgroundReplyActivityProps,
+  BackgroundReplyContent,
+  BackgroundReplyPhase,
+} from '@/shared/backgroundActivity/chatReply';
+
+export type BackgroundReplyOutcome = Extract<
+  BackgroundReplyPhase,
+  'cancelled' | 'completed' | 'failed'
+>;
+
+export type BackgroundReplyMessage = Pick<AgentMessageView, 'parts'>;
+
+export type BackgroundReplyUpdateOptions = {
+  deferPreview?: boolean;
+};
+
+/**
+ * Capability handle for one reply generation. Calls never throw, and handles
+ * superseded by a newer generation become no-ops.
+ */
+export type BackgroundReplyTurn = {
+  updateContent(content: BackgroundReplyContent): void;
+  awaitApproval: (message?: BackgroundReplyMessage, reason?: 'question') => void;
+  /** Shows terminal content immediately; `waitFor` delays only final surface dismissal. */
+  finish: (outcome: BackgroundReplyOutcome, options?: { waitFor?: Promise<unknown> }) => void;
+  update: (message: BackgroundReplyMessage, options?: BackgroundReplyUpdateOptions) => void;
+};
+
+export type BackgroundReplyTurnInput = {
+  connectionId?: string;
+  agentId: string;
+  agentName: string;
+  sessionId: string;
+  sessionTitle: string;
+  onInterrupt?: (reason: Error) => void | Promise<void>;
+};
+
+export type BackgroundReplyLifecycle = {
+  /**
+   * Protects submission preparation until the turn acquires its own execution
+   * lease, and gives the Session a surface for the whole preparation stage:
+   * a user who leaves the app before the turn exists still gets one.
+   */
+  acquirePreparation: (sessionId: string, onInterrupt: (reason: Error) => void) => KeepAliveLease;
+  clearSession: (sessionId: string) => void;
+  startTurn: (input: BackgroundReplyTurnInput) => BackgroundReplyTurn;
+  updateSessionTitle: (sessionId: string, title: string, connectionId?: string) => void;
+};

@@ -1,0 +1,99 @@
+export type BuiltInToolIconName =
+  | 'calendar'
+  | 'fileEdit'
+  | 'fileText'
+  | 'health'
+  | 'image'
+  | 'location'
+  | 'reminders'
+  | 'web';
+
+type BuiltInToolDefinition = {
+  iconName: BuiltInToolIconName;
+  titleKey: string;
+};
+
+export const builtInToolDefinitions: Record<string, BuiltInToolDefinition> = {
+  agent_create: { iconName: 'fileEdit', titleKey: 'chat.agentTool.create' },
+  agent_update: { iconName: 'fileEdit', titleKey: 'chat.agentTool.update' },
+  agent_get: { iconName: 'fileText', titleKey: 'chat.agentTool.get' },
+  agent_list: { iconName: 'fileText', titleKey: 'chat.agentTool.list' },
+  ask_user_question: { iconName: 'reminders', titleKey: 'chat.question.title' },
+  calendar_create_event: {
+    iconName: 'calendar',
+    titleKey: 'chat.builtinTool.calendar.createEvent',
+  },
+  reminder_create_item: {
+    iconName: 'reminders',
+    titleKey: 'chat.builtinTool.reminders.create',
+  },
+  calendar_delete_event: {
+    iconName: 'calendar',
+    titleKey: 'chat.builtinTool.calendar.deleteEvent',
+  },
+  reminder_delete_item: {
+    iconName: 'reminders',
+    titleKey: 'chat.builtinTool.reminders.delete',
+  },
+  location_get_current: {
+    iconName: 'location',
+    titleKey: 'chat.builtinTool.location.current',
+  },
+  health_get_summary: {
+    // Historical transcript display only; health tools are absent from the executable catalog.
+    iconName: 'health',
+    titleKey: 'chat.builtinTool.health.summary',
+  },
+  calendar_list_events: {
+    iconName: 'calendar',
+    titleKey: 'chat.builtinTool.calendar.listEvents',
+  },
+  calendar_list_collections: {
+    iconName: 'calendar',
+    titleKey: 'chat.builtinTool.calendar.listCalendars',
+  },
+  reminder_list_collections: {
+    iconName: 'reminders',
+    titleKey: 'chat.builtinTool.reminders.listLists',
+  },
+  reminder_list_items: {
+    iconName: 'reminders',
+    titleKey: 'chat.builtinTool.reminders.list',
+  },
+  health_list_workouts: {
+    iconName: 'health',
+    titleKey: 'chat.builtinTool.health.listWorkouts',
+  },
+  calendar_update_event: {
+    iconName: 'calendar',
+    titleKey: 'chat.builtinTool.calendar.updateEvent',
+  },
+  reminder_update_item: {
+    iconName: 'reminders',
+    titleKey: 'chat.builtinTool.reminders.update',
+  },
+  edit_file: {
+    iconName: 'fileEdit',
+    titleKey: 'chat.builtinTool.file.edit',
+  },
+  read_file: {
+    iconName: 'fileText',
+    titleKey: 'chat.builtinTool.file.read',
+  },
+  write_file: {
+    iconName: 'fileText',
+    titleKey: 'chat.builtinTool.file.write',
+  },
+  generate_image: {
+    iconName: 'image',
+    titleKey: 'chat.builtinTool.media.generateImage',
+  },
+  web_search: {
+    iconName: 'web',
+    titleKey: 'chat.builtinTool.web.search',
+  },
+  web_fetch: {
+    iconName: 'web',
+    titleKey: 'chat.builtinTool.web.fetch',
+  },
+};

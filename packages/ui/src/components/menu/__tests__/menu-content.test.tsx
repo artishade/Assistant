@@ -1,0 +1,270 @@
+import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+
+import { MenuContent } from '../menu-content';
+import { MenuPanel } from '../menu-panel';
+
+const mockOpenChange = jest.fn();
+const mockClosed = jest.fn();
+let mockShouldUseNativePresses = false;
+const anchor = { height: 48, pageX: 16, pageY: 120, width: 200 };
+
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+  default: () => ({ fontScale: 1, height: 800, scale: 1, width: 400 }),
+}));
+
+jest.mock('../use-menu-motion', () => ({
+  useMenuMotion: () => ({ isVisible: true, progress: { value: 1 } }),
+}));
+
+jest.mock('react-native-reanimated', () => {
+  const React = jest.requireActual('react');
+  const { View } = jest.requireActual('react-native');
+  return {
+    __esModule: true,
+    default: { View },
+    cancelAnimation: jest.fn(),
+    Easing: { bezier: () => 'bezier' },
+    interpolate: (value: number, _input: number[], output: number[]) =>
+      output[0] + (output[1] - output[0]) * value,
+    runOnJS: (fn: unknown) => fn,
+    useAnimatedStyle: (factory: () => object) => factory(),
+    useReducedMotion: () => false,
+    useSharedValue: (initial: number) => {
+      const ref = React.useRef({
+        value: initial,
+        set(next: number) {
+          this.value = next;
+        },
+      });
+      return ref.current;
+    },
+    withTiming: (value: number) => value,
+  };
+});
+
+jest.mock('heroui-native/utils', () => {
+  const { twMerge } = jest.requireActual('tailwind-merge');
+  return { cn: (...values: unknown[]) => twMerge(values.filter(Boolean).join(' ')) };
+});
+
+jest.mock('../menu-overlay', () => {
+  const React = jest.requireActual('react');
+  const { View } = jest.requireActual('react-native');
+  const { MenuInteraction } = jest.requireActual('../menu-interaction');
+
+  return {
+    MenuOverlay: ({
+      children,
+      isOpen,
+      onClose,
+      ...props
+    }: {
+      children: React.ReactNode;
+      isOpen: boolean;
+      onClose: () => void;
+    }) =>
+      React.createElement(
+        MenuInteraction,
+        {
+          value: {
+            isOpen,
+            close: onClose,
+            shouldUseNativePresses: mockShouldUseNativePresses,
+          },
+        },
+        React.createElement(View, props, children),
+      ),
+  };
+});
+
+jest.mock('../menu-panel', () => {
+  const React = jest.requireActual('react');
+  const { View } = jest.requireActual('react-native');
+  return {
+    MenuPanel: (props: object) => React.createElement(View, props),
+  };
+});
+
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ bottom: 24, left: 0, right: 0, top: 24 }),
+}));
+
+jest.mock('@cherrystudio/app-icons/icons/check', () => () => null);
+jest.mock('@cherrystudio/app-icons/icons/git-fork', () => () => null);
+
+// Native coordinate/scroll arbitration needs device coverage. These cases
+// protect the shared action, dismissal, and accessibility contract in both paths.
+describe.each([false, true])('MenuContent (native presses: %s)', (shouldUseNativePresses) => {
+  let renderer: ReactTestRenderer | undefined;
+
+  beforeEach(() => {
+    mockOpenChange.mockReset();
+    mockShouldUseNativePresses = shouldUseNativePresses;
+  });
+
+  afterEach(() => {
+    act(() => renderer?.unmount());
+    renderer = undefined;
+    jest.restoreAllMocks();
+  });
+
+  it.each([
+    { name: 'ordinary touch', pageX: 100, pageY: 240, left: 100, top: 248 },
+    { name: 'lower-right edge', pageX: 390, pageY: 730, left: 176, top: 602 },
+    { name: 'upper-left edge', pageX: 2, pageY: 2, left: 16, top: 40 },
+  ])('positions a pointer menu within the safe area: $name', ({ pageX, pageY, left, top }) => {
+    act(() => {
+      renderer = create(
+        <MenuContent
+          anchor={{ height: 0, pageX, pageY, width: 0 }}
+          isOpen
+          items={[{ id: 'copy', label: 'Copy', onPress: jest.fn() }]}
+          onClose={mockOpenChange}
+          onClosed={mockClosed}
+        />,
+      );
+    });
+    act(() => {
+      renderer!.root.findByType(MenuPanel).props.onLayout({
+        nativeEvent: { layout: { height: 120 } },
+      });
+    });
+
+    expect(renderer!.root.findByProps({ role: 'menu' }).props.style).toMatchObject({
+      height: 120,
+      left,
+      top,
+      width: 208,
+    });
+  });
+
+  it('keeps a button menu aligned to the right edge of its measured trigger', () => {
+    act(() => {
+      renderer = create(
+        <MenuContent
+          anchor={{ height: 44, pageX: 200, pageY: 240, width: 44 }}
+          isOpen
+          items={[{ id: 'copy', label: 'Copy', onPress: jest.fn() }]}
+          onClose={mockOpenChange}
+          onClosed={mockClosed}
+        />,
+      );
+    });
+    act(() => {
+      renderer!.root.findByType(MenuPanel).props.onLayout({
+        nativeEvent: { layout: { height: 120 } },
+      });
+    });
+
+    expect(renderer!.root.findByProps({ role: 'menu' }).props.style).toMatchObject({
+      left: 36,
+      top: 292,
+    });
+  });
+
+  it('hands the selected action to dismissal without running it in the open menu', () => {
+    const order: string[] = [];
+    mockOpenChange.mockImplementation(() => order.push('close'));
+    const onPress = jest.fn(() => {
+      order.push('action');
+      throw new Error('Action failed');
+    });
+
+    act(() => {
+      renderer = create(
+        <MenuContent
+          anchor={anchor}
+          isOpen
+          onClose={mockOpenChange}
+          onClosed={mockClosed}
+          items={[{ destructive: true, id: 'delete', label: 'Delete', onPress }]}
+        />,
+      );
+    });
+
+    act(() => renderer!.root.findByProps({ accessibilityLabel: 'Delete' }).props.onPress());
+    expect(order).toEqual(['close']);
+    expect(mockOpenChange).toHaveBeenCalledTimes(1);
+    expect(onPress).not.toHaveBeenCalled();
+    expect(() => mockOpenChange.mock.calls[0][0]()).toThrow('Action failed');
+    expect(order).toEqual(['close', 'action']);
+    expect(onPress).toHaveBeenCalledTimes(1);
+  });
+
+  it('never dispatches a disabled action or dismisses for it', () => {
+    const onPress = jest.fn();
+
+    act(() => {
+      renderer = create(
+        <MenuContent
+          anchor={anchor}
+          isOpen
+          onClose={mockOpenChange}
+          onClosed={mockClosed}
+          items={[{ disabled: true, id: 'delete', label: 'Delete', onPress }]}
+        />,
+      );
+    });
+
+    const item = renderer!.root.findByProps({ accessibilityLabel: 'Delete' });
+    expect(item.props.disabled).toBe(true);
+    act(() => item.props.onPress());
+    expect(onPress).not.toHaveBeenCalled();
+    expect(mockOpenChange).not.toHaveBeenCalled();
+  });
+
+  it('keeps check state controlled by the caller and exposes it to accessibility', () => {
+    const onPress = jest.fn();
+
+    act(() => {
+      renderer = create(
+        <MenuContent
+          anchor={anchor}
+          isOpen
+          onClose={mockOpenChange}
+          onClosed={mockClosed}
+          items={[{ checked: true, id: 'pin', label: 'Pin', onPress }]}
+        />,
+      );
+    });
+
+    const item = renderer!.root.findByProps({ accessibilityLabel: 'Pin' });
+    expect(item.props).toMatchObject({
+      accessibilityLabel: 'Pin',
+      accessibilityRole: 'checkbox',
+      accessibilityState: { checked: true, disabled: false },
+    });
+    act(() => item.props.onPress());
+    expect(mockOpenChange).toHaveBeenCalledWith(onPress);
+    expect(item.props.accessibilityState.checked).toBe(true);
+  });
+
+  it('stops accepting selections as soon as closing begins', () => {
+    const items = [{ id: 'rename', label: 'Rename', onPress: jest.fn() }];
+    act(() => {
+      renderer = create(
+        <MenuContent
+          anchor={anchor}
+          isOpen
+          items={items}
+          onClose={mockOpenChange}
+          onClosed={mockClosed}
+        />,
+      );
+    });
+    act(() =>
+      renderer!.update(
+        <MenuContent
+          anchor={anchor}
+          isOpen={false}
+          items={items}
+          onClose={mockOpenChange}
+          onClosed={mockClosed}
+        />,
+      ),
+    );
+    act(() => renderer!.root.findByProps({ accessibilityLabel: 'Rename' }).props.onPress());
+    expect(items[0].onPress).not.toHaveBeenCalled();
+    expect(mockOpenChange).not.toHaveBeenCalled();
+  });
+});

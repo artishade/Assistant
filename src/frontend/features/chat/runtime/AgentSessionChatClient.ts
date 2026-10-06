@@ -1,0 +1,722 @@
+import type {
+  AgentApprovalView,
+  AgentPendingQuestion,
+  AgentUserAnswers,
+  AgentEvent,
+  AgentMessageDelta,
+  AgentMessageView,
+  AgentProtocol,
+  AgentRetryMessageInput,
+  AgentSessionObservation,
+  AgentSessionSnapshot,
+  AgentSessionView,
+  AgentStartSessionInput,
+  AgentSubmitMessageInput,
+  AgentTurnView,
+} from '@/shared/contracts/agent';
+import { AgentProtocolError } from '@/shared/contracts/agent';
+
+import { ToolInputPreviewStore } from './ToolInputPreviewStore';
+
+export type AgentSessionChatStatus = 'idle' | 'observing' | 'ready' | 'error';
+
+export type AgentSessionChatState = {
+  isSubmitting?: boolean;
+  /** Answer awaiting its replacement turn; rendered as pending until it arrives. */
+  retryingMessageId?: string;
+  activeTurn: AgentTurnView | null;
+  enteringUserMessageId?: string;
+  error?: Error;
+  hasHistoryBeforeActiveTurn?: boolean;
+  liveMessages: readonly AgentMessageView[];
+  pendingApprovals: readonly AgentApprovalView[];
+  pendingQuestion: AgentPendingQuestion | null;
+  sessionId: string;
+  snapshot?: AgentSessionSnapshot;
+  status: AgentSessionChatStatus;
+};
+
+type AgentSessionChatClientOptions = {
+  onSessionChanged?: (sessionId: string) => void;
+  onTranscriptChanged?: (sessionId: string) => void;
+};
+
+type SessionEntry = {
+  generation: number;
+  listeners: Set<() => void>;
+  liveMessages: Map<string, AgentMessageView>;
+  liveMessagesFlush?: ReturnType<typeof setTimeout>;
+  observation?: AgentSessionObservation;
+  observationPromise?: Promise<void>;
+  pendingTextDeltas: Map<string, { chunks: string[]; messageId: string; partId: string }>;
+  state: AgentSessionChatState;
+};
+
+// Like Desktop's streaming overlay, space out full-message render commits as
+// content grows. Deltas remain lossless; terminal events still flush immediately.
+const MIN_LIVE_MESSAGE_FLUSH_INTERVAL_MS = 100;
+const MAX_LIVE_MESSAGE_FLUSH_INTERVAL_MS = 3000;
+const LIVE_MESSAGE_CHARS_PER_MS = 2000;
+
+const TERMINAL_TURN_STATUSES = new Set<AgentTurnView['status']>([
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted',
+]);
+
+/**
+ * A Session is busy from the moment a submission or retry is admitted until its
+ * turn settles. Derived by exclusion so a future non-terminal turn status is
+ * treated as busy rather than silently unlocking the composer and retry action.
+ */
+export function isAgentSessionBusy(state: AgentSessionChatState): boolean {
+  return Boolean(
+    state.isSubmitting ||
+    (state.activeTurn && !TERMINAL_TURN_STATUSES.has(state.activeTurn.status)),
+  );
+}
+
+function createSessionState(sessionId: string): AgentSessionChatState {
+  return {
+    activeTurn: null,
+    liveMessages: [],
+    pendingApprovals: [],
+    pendingQuestion: null,
+    sessionId,
+    status: 'idle',
+  };
+}
+
+function applyMessageDelta(message: AgentMessageView, delta: AgentMessageDelta): AgentMessageView {
+  switch (delta.op) {
+    case 'part.add': {
+      const parts = [...message.parts];
+      parts.splice(Math.min(delta.index, parts.length), 0, delta.part);
+      return { ...message, parts };
+    }
+    case 'text.append': {
+      let changed = false;
+      const parts = message.parts.map((part) => {
+        if (part.id !== delta.partId || (part.type !== 'text' && part.type !== 'reasoning')) {
+          return part;
+        }
+
+        changed = true;
+        return { ...part, text: `${part.text}${delta.text}` };
+      });
+      return changed ? { ...message, parts } : message;
+    }
+    case 'part.replace': {
+      let changed = false;
+      const parts = message.parts.map((part) => {
+        if (part.id !== delta.part.id) {
+          return part;
+        }
+
+        changed = true;
+        return delta.part;
+      });
+      return changed ? { ...message, parts } : message;
+    }
+    case 'tool.input.preview':
+      return message;
+  }
+}
+
+function isTerminalMessage(message: AgentMessageView): boolean {
+  return message.status !== 'pending' && message.status !== 'streaming';
+}
+
+export class AgentSessionChatClient {
+  readonly toolInputPreviews = new ToolInputPreviewStore();
+  private readonly sessions = new Map<string, SessionEntry>();
+  private isObservationPaused = false;
+
+  constructor(
+    private readonly protocol: AgentProtocol,
+    private readonly options: AgentSessionChatClientOptions = {},
+  ) {}
+
+  getState(sessionId: string): AgentSessionChatState {
+    return this.getEntry(sessionId).state;
+  }
+
+  subscribe(sessionId: string, listener: () => void): () => void {
+    const entry = this.getEntry(sessionId);
+    entry.listeners.add(listener);
+    void this.observe(sessionId).catch(() => undefined);
+
+    return () => {
+      entry.listeners.delete(listener);
+      if (entry.listeners.size === 0) {
+        this.stopObservation(entry);
+        if (this.sessions.get(sessionId) === entry) {
+          this.sessions.delete(sessionId);
+        }
+      }
+    };
+  }
+
+  async observe(sessionId: string, force = false): Promise<void> {
+    if (this.isObservationPaused) {
+      return;
+    }
+    const entry = this.getEntry(sessionId);
+    if (entry.observationPromise) {
+      return entry.observationPromise;
+    }
+    if (entry.observation && !force) {
+      return;
+    }
+
+    this.stopObservation(entry);
+    const generation = entry.generation;
+    this.updateState(entry, {
+      ...entry.state,
+      error: undefined,
+      status: 'observing',
+    });
+
+    const queuedEvents: AgentEvent[] = [];
+    let isSnapshotInstalled = false;
+    const observationPromise = this.protocol
+      .observeSession(sessionId, (event) => {
+        if (entry.generation !== generation) {
+          return;
+        }
+        if (!isSnapshotInstalled) {
+          queuedEvents.push(event);
+          return;
+        }
+        this.applyEvent(entry, event);
+      })
+      .then((observation) => {
+        if (entry.generation !== generation) {
+          observation.unsubscribe();
+          return;
+        }
+
+        entry.observation = observation;
+        this.installSnapshot(entry, observation.snapshot);
+        // A fresh Host snapshot can reflect terminal events missed while this
+        // session had no observers. Refresh the durable transcript projection.
+        this.options.onTranscriptChanged?.(sessionId);
+        isSnapshotInstalled = true;
+        for (const event of queuedEvents) {
+          this.applyEvent(entry, event);
+        }
+        if (entry.liveMessagesFlush !== undefined) {
+          this.commitLiveMessages(entry);
+        }
+      })
+      .catch((error: unknown) => {
+        if (entry.generation !== generation) {
+          return;
+        }
+
+        const observationError = error instanceof Error ? error : new Error(String(error));
+        this.updateState(entry, {
+          ...entry.state,
+          error: observationError,
+          status: 'error',
+        });
+        throw observationError;
+      })
+      .finally(() => {
+        if (entry.observationPromise === observationPromise) {
+          entry.observationPromise = undefined;
+        }
+      });
+    entry.observationPromise = observationPromise;
+    return observationPromise;
+  }
+
+  async refresh(sessionId: string): Promise<void> {
+    await this.observe(sessionId, true);
+  }
+
+  pauseObservedSessions(): void {
+    if (this.isObservationPaused) {
+      return;
+    }
+    this.isObservationPaused = true;
+    for (const entry of this.sessions.values()) {
+      this.stopObservation(entry);
+    }
+  }
+
+  async resumeObservedSessions(): Promise<void> {
+    this.isObservationPaused = false;
+    await Promise.allSettled(
+      [...this.sessions.entries()]
+        .filter(([, entry]) => entry.listeners.size > 0)
+        .map(([sessionId]) => this.refresh(sessionId)),
+    );
+  }
+
+  async startSession(input: AgentStartSessionInput): Promise<AgentSessionView> {
+    const session = await this.protocol.startSession(input);
+    // The destination route observes after navigation. Its atomic Host snapshot
+    // reconstructs any live turn state without leaving an ownerless listener here.
+    return session;
+  }
+
+  async forkSession(
+    sessionId: string,
+    fromMessageId: string,
+    title?: string,
+  ): Promise<AgentSessionView> {
+    const session = await this.protocol.forkSession({
+      fromMessageId,
+      sessionId,
+      ...(title ? { title } : {}),
+    });
+    // As with a new Session, the destination route owns observation.
+    return session;
+  }
+
+  /**
+   * The removal reaches live state through the Session's own `turn.deleted`
+   * event, so a caller that is already observing needs no separate reconcile.
+   */
+  async deleteTurn(sessionId: string, turnId: string): Promise<void> {
+    await this.protocol.deleteTurn({ sessionId, turnId });
+  }
+
+  async submitMessage(input: AgentSubmitMessageInput) {
+    const { sessionId } = input;
+    const entry = this.getEntry(sessionId);
+    this.beginSubmission(entry);
+    try {
+      await this.observe(sessionId);
+      return await this.protocol.submitMessage(input);
+    } finally {
+      this.updateState(entry, { ...entry.state, isSubmitting: false });
+      // Non-React callers may submit without ever installing a subscriber. The
+      // Host snapshot makes a later observation lossless, so do not retain an
+      // ownerless listener or SessionEntry after admission completes.
+      if (entry.listeners.size === 0 && this.sessions.get(sessionId) === entry) {
+        this.stopObservation(entry);
+        this.sessions.delete(sessionId);
+      }
+    }
+  }
+
+  async retryMessage(input: AgentRetryMessageInput): Promise<void> {
+    const entry = this.getEntry(input.sessionId);
+    // Admission is as slow as a submission's, and unlike a submission it has no
+    // new rows to show for it. The answer reads as pending from the press until
+    // the Host publishes the reserved one, so the wait looks like a wait.
+    this.beginSubmission(entry, input.messageId);
+    try {
+      await this.observe(input.sessionId);
+      await this.protocol.retryMessage(input);
+      this.options.onSessionChanged?.(input.sessionId);
+      this.options.onTranscriptChanged?.(input.sessionId);
+    } finally {
+      // The Host published the reserved answer before resolving, so dropping
+      // the projection here reveals that view rather than the replaced one.
+      // A rejected admission has published nothing and restores the old answer.
+      this.updateState(entry, {
+        ...entry.state,
+        isSubmitting: false,
+        retryingMessageId: undefined,
+      });
+      if (entry.listeners.size === 0 && this.sessions.get(input.sessionId) === entry) {
+        this.stopObservation(entry);
+        this.sessions.delete(input.sessionId);
+      }
+    }
+  }
+
+  private beginSubmission(entry: SessionEntry, retryingMessageId?: string): void {
+    if (
+      entry.state.isSubmitting ||
+      (entry.state.activeTurn && !TERMINAL_TURN_STATUSES.has(entry.state.activeTurn.status))
+    ) {
+      throw new AgentProtocolError({
+        code: 'SESSION_BUSY',
+        message: 'The session is busy.',
+        retryable: false,
+      });
+    }
+    this.updateState(entry, { ...entry.state, isSubmitting: true, retryingMessageId });
+  }
+
+  reconcilePersistedMessages(
+    sessionId: string,
+    persistedMessages: readonly AgentMessageView[],
+  ): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry || entry.liveMessages.size === 0 || persistedMessages.length === 0) {
+      return;
+    }
+
+    const persistedById = new Map(persistedMessages.map((message) => [message.id, message]));
+    let changed = false;
+    for (const [messageId, liveMessage] of entry.liveMessages) {
+      const persistedMessage = persistedById.get(messageId);
+      if (
+        persistedMessage &&
+        isTerminalMessage(liveMessage) &&
+        isTerminalMessage(persistedMessage) &&
+        persistedMessage.turnId === liveMessage.turnId &&
+        persistedMessage.status === liveMessage.status &&
+        Date.parse(persistedMessage.updatedAt) >= Date.parse(liveMessage.updatedAt)
+      ) {
+        // Late usage can advance a terminal row beyond the finalized event.
+        entry.liveMessages.delete(messageId);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.commitLiveMessages(entry);
+    }
+  }
+
+  async cancelTurn(sessionId: string): Promise<void> {
+    const turn = this.getEntry(sessionId).state.activeTurn;
+    if (!turn || TERMINAL_TURN_STATUSES.has(turn.status)) {
+      return;
+    }
+
+    await this.protocol.cancelTurn({ sessionId, turnId: turn.id });
+  }
+
+  async respondQuestion(
+    sessionId: string,
+    toolCallId: string,
+    answer: AgentUserAnswers,
+  ): Promise<void> {
+    const question = this.getEntry(sessionId).state.pendingQuestion;
+    if (!question || question.toolCallId !== toolCallId) {
+      throw new Error('This question is no longer pending.');
+    }
+    await this.protocol.respondQuestion({ sessionId, turnId: question.turnId, toolCallId, answer });
+  }
+
+  async respondApproval(
+    sessionId: string,
+    approvalId: string,
+    decision: 'approve' | 'deny',
+  ): Promise<void> {
+    const approval = this.getEntry(sessionId).state.pendingApprovals.find(
+      (candidate) => candidate.id === approvalId,
+    );
+    if (!approval) {
+      return;
+    }
+
+    await this.protocol.respondApproval({
+      approvalId,
+      decision,
+      sessionId,
+      turnId: approval.turnId,
+    });
+  }
+
+  dispose(): void {
+    for (const entry of this.sessions.values()) {
+      this.stopObservation(entry);
+      entry.listeners.clear();
+    }
+    this.sessions.clear();
+    this.toolInputPreviews.clear();
+  }
+
+  private getEntry(sessionId: string): SessionEntry {
+    const existing = this.sessions.get(sessionId);
+    if (existing) {
+      return existing;
+    }
+
+    const entry: SessionEntry = {
+      generation: 0,
+      listeners: new Set(),
+      liveMessages: new Map(),
+      pendingTextDeltas: new Map(),
+      state: createSessionState(sessionId),
+    };
+    this.sessions.set(sessionId, entry);
+    return entry;
+  }
+
+  private stopObservation(entry: SessionEntry): void {
+    entry.generation += 1;
+    this.cancelLiveMessagesFlush(entry);
+    entry.pendingTextDeltas.clear();
+    entry.observation?.unsubscribe();
+    entry.observation = undefined;
+    entry.observationPromise = undefined;
+    for (const messageId of entry.liveMessages.keys())
+      this.toolInputPreviews.clearMessage(messageId);
+  }
+
+  private installSnapshot(entry: SessionEntry, snapshot: AgentSessionSnapshot): void {
+    entry.liveMessages.clear();
+    if (snapshot.activeUserMessage) {
+      entry.liveMessages.set(snapshot.activeUserMessage.id, snapshot.activeUserMessage);
+    }
+    if (snapshot.streamingMessage) {
+      entry.liveMessages.set(snapshot.streamingMessage.id, snapshot.streamingMessage);
+      this.installToolInputPreviews(snapshot.streamingMessage);
+    }
+    this.updateState(entry, {
+      isSubmitting: entry.state.isSubmitting,
+      retryingMessageId: entry.state.retryingMessageId,
+      activeTurn: snapshot.activeTurn,
+      ...(snapshot.activeUserMessage
+        ? { enteringUserMessageId: snapshot.activeUserMessage.id }
+        : {}),
+      hasHistoryBeforeActiveTurn: snapshot.hasHistoryBeforeActiveTurn ?? undefined,
+      liveMessages: [...entry.liveMessages.values()],
+      pendingApprovals: snapshot.pendingApprovals,
+      pendingQuestion: snapshot.pendingQuestion,
+      sessionId: snapshot.session.id,
+      snapshot,
+      status: 'ready',
+    });
+  }
+
+  private applyEvent(entry: SessionEntry, event: AgentEvent): void {
+    switch (event.type) {
+      case 'question.updated':
+        this.updateState(entry, { ...entry.state, pendingQuestion: event.question });
+        return;
+      case 'session.updated':
+        this.updateState(entry, {
+          ...entry.state,
+          ...(entry.state.snapshot
+            ? {
+                snapshot: {
+                  ...entry.state.snapshot,
+                  session: event.session,
+                },
+              }
+            : {}),
+        });
+        this.options.onSessionChanged?.(event.session.id);
+        return;
+      case 'turn.updated':
+        this.updateState(entry, {
+          ...entry.state,
+          activeTurn: event.turn,
+          pendingQuestion: TERMINAL_TURN_STATUSES.has(event.turn.status)
+            ? null
+            : entry.state.pendingQuestion,
+          pendingApprovals: TERMINAL_TURN_STATUSES.has(event.turn.status)
+            ? []
+            : entry.state.pendingApprovals,
+        });
+        if (TERMINAL_TURN_STATUSES.has(event.turn.status)) {
+          this.options.onSessionChanged?.(entry.state.sessionId);
+        }
+        return;
+      case 'message.created':
+        entry.liveMessages.set(event.message.id, event.message);
+        this.installToolInputPreviews(event.message);
+        this.commitLiveMessages(entry, {
+          ...(event.message.role === 'user' ? { enteringUserMessageId: event.message.id } : {}),
+        });
+        if (event.message.role === 'user') {
+          this.options.onSessionChanged?.(entry.state.sessionId);
+        }
+        this.options.onTranscriptChanged?.(entry.state.sessionId);
+        return;
+      case 'message.delta': {
+        if (event.delta.op === 'tool.input.preview') {
+          const partId = event.delta.partId;
+          const part = entry.liveMessages
+            .get(event.messageId)
+            ?.parts.find((part) => part.id === partId);
+          if (part?.type === 'tool' && part.state === 'input-streaming') {
+            this.toolInputPreviews.set(event.messageId, part.toolCallId, event.delta.preview);
+          }
+          return;
+        }
+        if (event.delta.op === 'text.append') {
+          if (!this.queueTextDelta(entry, event.messageId, event.delta)) {
+            return;
+          }
+          this.scheduleLiveMessagesFlush(entry);
+          return;
+        }
+
+        this.applyPendingTextDeltas(entry);
+        const message = entry.liveMessages.get(event.messageId);
+        if (!message) {
+          return;
+        }
+        const nextMessage = applyMessageDelta(message, event.delta);
+        if (nextMessage === message) {
+          return;
+        }
+        entry.liveMessages.set(event.messageId, nextMessage);
+        if (event.delta.op === 'part.replace' && event.delta.part.type === 'tool') {
+          this.toolInputPreviews.set(
+            event.messageId,
+            event.delta.part.toolCallId,
+            event.delta.part.inputPreview,
+          );
+        }
+        this.commitLiveMessages(entry);
+        return;
+      }
+      case 'message.finalized':
+        entry.pendingTextDeltas.clear();
+        entry.liveMessages.set(event.message.id, event.message);
+        this.toolInputPreviews.clearMessage(event.message.id);
+        this.commitLiveMessages(entry);
+        this.options.onTranscriptChanged?.(entry.state.sessionId);
+        return;
+      case 'turn.deleted': {
+        for (const messageId of event.messageIds) {
+          entry.liveMessages.delete(messageId);
+          this.toolInputPreviews.clearMessage(messageId);
+        }
+        // The last turn this generation ran may be the one that just left the
+        // transcript; keeping its view would report a turn nothing can show.
+        const isActiveTurnDeleted = entry.state.activeTurn?.id === event.turnId;
+        this.commitLiveMessages(entry, {
+          ...(isActiveTurnDeleted
+            ? { activeTurn: null, pendingApprovals: [], pendingQuestion: null }
+            : {}),
+          ...(entry.state.enteringUserMessageId &&
+          event.messageIds.includes(entry.state.enteringUserMessageId)
+            ? { enteringUserMessageId: undefined }
+            : {}),
+        });
+        this.options.onTranscriptChanged?.(entry.state.sessionId);
+        this.options.onSessionChanged?.(entry.state.sessionId);
+        return;
+      }
+      case 'approval.requested':
+        this.updateState(entry, {
+          ...entry.state,
+          pendingApprovals: [
+            ...entry.state.pendingApprovals.filter((approval) => approval.id !== event.approval.id),
+            event.approval,
+          ],
+        });
+        return;
+      case 'approval.resolved':
+        this.updateState(entry, {
+          ...entry.state,
+          pendingApprovals: entry.state.pendingApprovals.filter(
+            (approval) => approval.id !== event.approval.id,
+          ),
+        });
+    }
+  }
+
+  private cancelLiveMessagesFlush(entry: SessionEntry): void {
+    if (entry.liveMessagesFlush === undefined) {
+      return;
+    }
+    clearTimeout(entry.liveMessagesFlush);
+    entry.liveMessagesFlush = undefined;
+  }
+
+  private installToolInputPreviews(message: AgentMessageView): void {
+    for (const part of message.parts) {
+      if (part.type === 'tool' && part.inputPreview) {
+        this.toolInputPreviews.set(message.id, part.toolCallId, part.inputPreview);
+      }
+    }
+  }
+
+  private commitLiveMessages(
+    entry: SessionEntry,
+    statePatch: Partial<AgentSessionChatState> = {},
+  ): void {
+    this.applyPendingTextDeltas(entry);
+    this.cancelLiveMessagesFlush(entry);
+    this.updateState(entry, {
+      ...entry.state,
+      ...statePatch,
+      liveMessages: [...entry.liveMessages.values()],
+    });
+  }
+
+  private scheduleLiveMessagesFlush(entry: SessionEntry): void {
+    if (entry.liveMessagesFlush !== undefined) {
+      return;
+    }
+    let chars = 0;
+    for (const message of entry.liveMessages.values()) {
+      if (isTerminalMessage(message)) continue;
+      for (const part of message.parts) {
+        if (part.type === 'text' || part.type === 'reasoning') chars += part.text.length;
+      }
+    }
+    for (const pending of entry.pendingTextDeltas.values()) {
+      for (const chunk of pending.chunks) chars += chunk.length;
+    }
+    const interval = Math.min(
+      MAX_LIVE_MESSAGE_FLUSH_INTERVAL_MS,
+      Math.max(MIN_LIVE_MESSAGE_FLUSH_INTERVAL_MS, chars / LIVE_MESSAGE_CHARS_PER_MS),
+    );
+    // Do not move an already scheduled deadline when more deltas arrive: a busy
+    // stream must keep becoming visible instead of indefinitely debouncing.
+    entry.liveMessagesFlush = setTimeout(() => {
+      entry.liveMessagesFlush = undefined;
+      this.commitLiveMessages(entry);
+    }, interval);
+  }
+
+  private queueTextDelta(
+    entry: SessionEntry,
+    messageId: string,
+    delta: Extract<AgentMessageDelta, { op: 'text.append' }>,
+  ): boolean {
+    if (delta.text.length === 0) return false;
+
+    const message = entry.liveMessages.get(messageId);
+    const target = message?.parts.find(
+      (part) => part.id === delta.partId && (part.type === 'text' || part.type === 'reasoning'),
+    );
+    if (!target) return false;
+
+    const key = `${messageId}\u0000${delta.partId}`;
+    const pending = entry.pendingTextDeltas.get(key);
+    if (pending) {
+      pending.chunks.push(delta.text);
+    } else {
+      entry.pendingTextDeltas.set(key, {
+        chunks: [delta.text],
+        messageId,
+        partId: delta.partId,
+      });
+    }
+    return true;
+  }
+
+  private applyPendingTextDeltas(entry: SessionEntry): void {
+    if (entry.pendingTextDeltas.size === 0) return;
+
+    for (const { chunks, messageId, partId } of entry.pendingTextDeltas.values()) {
+      const message = entry.liveMessages.get(messageId);
+      if (!message) continue;
+      const nextMessage = applyMessageDelta(message, {
+        op: 'text.append',
+        partId,
+        text: chunks.join(''),
+      });
+      if (nextMessage !== message) {
+        entry.liveMessages.set(messageId, nextMessage);
+      }
+    }
+    entry.pendingTextDeltas.clear();
+  }
+
+  private updateState(entry: SessionEntry, state: AgentSessionChatState): void {
+    entry.state = state;
+    for (const listener of entry.listeners) {
+      listener();
+    }
+  }
+}
+
+export const __testing = { applyMessageDelta };

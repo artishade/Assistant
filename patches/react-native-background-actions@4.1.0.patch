@@ -1,0 +1,576 @@
+diff --git a/android/build.gradle b/android/build.gradle
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -19,6 +19,8 @@
+ }
+ 
+ dependencies {
++    // Matches Expo Notifications; owns process visibility across activity switches.
++    implementation 'androidx.lifecycle:lifecycle-process:2.9.3'
+     //noinspection GradleDynamicVersion
+     implementation 'com.facebook.react:react-native:+'  // From node_modules
+ }
+diff --git a/android/src/main/java/com/asterinet/react/bgactions/BackgroundActionsModule.java b/android/src/main/java/com/asterinet/react/bgactions/BackgroundActionsModule.java
+--- a/android/src/main/java/com/asterinet/react/bgactions/BackgroundActionsModule.java
++++ b/android/src/main/java/com/asterinet/react/bgactions/BackgroundActionsModule.java
+@@ -1,12 +1,8 @@
+ package com.asterinet.react.bgactions;
+ 
+-import android.app.Notification;
+-import android.app.NotificationManager;
+-import android.content.Context;
+ import android.content.Intent;
+ 
+ import androidx.annotation.NonNull;
+-import androidx.core.content.ContextCompat;
+ 
+ import com.facebook.react.bridge.Promise;
+ import com.facebook.react.bridge.ReactApplicationContext;
+@@ -14,6 +10,7 @@
+ import com.facebook.react.bridge.ReactContextBaseJavaModule;
+ import com.facebook.react.bridge.ReactMethod;
+ import com.facebook.react.bridge.ReadableMap;
++import com.facebook.react.bridge.UiThreadUtil;
+ 
+ @SuppressWarnings("WeakerAccess")
+ public class BackgroundActionsModule extends ReactContextBaseJavaModule {
+@@ -38,49 +35,61 @@
+     @SuppressWarnings("unused")
+     @ReactMethod
+     public void start(@NonNull final ReadableMap options, @NonNull final Promise promise) {
+-        try {
+-            // Stop any other intent
+-            if (currentServiceIntent != null) {
+-                reactContext.stopService(currentServiceIntent);
++        UiThreadUtil.runOnUiThread(() -> {
++            try {
++                if (!RNBackgroundActionsTask.isAppVisible()) {
++                    throw new IllegalStateException("Background tasks must be admitted while the app is visible");
++                }
++                // Stop any other intent
++                if (currentServiceIntent != null) {
++                    reactContext.stopService(currentServiceIntent);
++                }
++                // Create the service
++                currentServiceIntent = new Intent(reactContext, RNBackgroundActionsTask.class);
++                // Get the task info from the options
++                final BackgroundTaskOptions bgOptions = new BackgroundTaskOptions(reactContext, options);
++                currentServiceIntent.putExtras(bgOptions.getExtras());
++                // Admit while visible, then remain foreground across visibility
++                // transitions without restarting Headless JS.
++                reactContext.startService(currentServiceIntent);
++                promise.resolve(null);
++            } catch (Exception e) {
++                currentServiceIntent = null;
++                promise.reject(e);
+             }
+-            // Create the service
+-            currentServiceIntent = new Intent(reactContext, RNBackgroundActionsTask.class);
+-            // Get the task info from the options
+-            final BackgroundTaskOptions bgOptions = new BackgroundTaskOptions(reactContext, options);
+-            currentServiceIntent.putExtras(bgOptions.getExtras());
+-            // Start the task
+-            // startForegroundService on Android 8+ (API 26+), startService below
+-            ContextCompat.startForegroundService(reactContext, currentServiceIntent);
+-            promise.resolve(null);
+-        } catch (Exception e) {
+-            promise.reject(e);
+-        }
++        });
+     }
+ 
+     @SuppressWarnings("unused")
+     @ReactMethod
+     public void stop(@NonNull final Promise promise) {
+-        if (currentServiceIntent != null) {
+-            reactContext.stopService(currentServiceIntent);
+-            currentServiceIntent = null;
+-        }
+-        promise.resolve(null);
++        UiThreadUtil.runOnUiThread(() -> {
++            if (currentServiceIntent != null) {
++                RNBackgroundActionsTask.prepareStop();
++                reactContext.stopService(currentServiceIntent);
++                currentServiceIntent = null;
++            }
++            promise.resolve(null);
++        });
+     }
+ 
+     @SuppressWarnings("unused")
+     @ReactMethod
+     public void updateNotification(@NonNull final ReadableMap options, @NonNull final Promise promise) {
+-        // Get the task info from the options
+-        try {
+-            final BackgroundTaskOptions bgOptions = new BackgroundTaskOptions(reactContext, options);
+-            final Notification notification = RNBackgroundActionsTask.buildNotification(reactContext, bgOptions);
+-            final NotificationManager notificationManager = (NotificationManager) reactContext.getSystemService(Context.NOTIFICATION_SERVICE);
+-            notificationManager.notify(RNBackgroundActionsTask.SERVICE_NOTIFICATION_ID, notification);
+-        } catch (Exception e) {
+-            promise.reject(e);
+-            return;
+-        }
+-        promise.resolve(null);
++        UiThreadUtil.runOnUiThread(() -> {
++            try {
++                if (currentServiceIntent != null) {
++                    final BackgroundTaskOptions bgOptions = new BackgroundTaskOptions(reactContext, options);
++                    // Apply on the same main-thread service before resolving. No
++                    // update intent can revive a dead task or race terminal detach.
++                    RNBackgroundActionsTask.updateNotification(bgOptions);
++                }
++            } catch (Exception e) {
++                promise.reject(e);
++                return;
++            }
++            promise.resolve(null);
++        });
+     }
+ 
+     @SuppressWarnings("unused")
+diff --git a/android/src/main/java/com/asterinet/react/bgactions/BackgroundTaskOptions.java b/android/src/main/java/com/asterinet/react/bgactions/BackgroundTaskOptions.java
+--- a/android/src/main/java/com/asterinet/react/bgactions/BackgroundTaskOptions.java
++++ b/android/src/main/java/com/asterinet/react/bgactions/BackgroundTaskOptions.java
+@@ -76,6 +76,15 @@
+ 
+     public Bundle getExtras() {
+         return extras;
++    }
++
++    public int getNotificationId() {
++        final Object value = extras.get("notificationId");
++        return value instanceof Number ? ((Number) value).intValue() : RNBackgroundActionsTask.SERVICE_NOTIFICATION_ID;
++    }
++
++    public boolean isOngoing() {
++        return extras.getBoolean("taskOngoing", true);
+     }
+ 
+     public String getTaskTitle() {
+diff --git a/android/src/main/java/com/asterinet/react/bgactions/RNBackgroundActionsTask.java b/android/src/main/java/com/asterinet/react/bgactions/RNBackgroundActionsTask.java
+--- a/android/src/main/java/com/asterinet/react/bgactions/RNBackgroundActionsTask.java
++++ b/android/src/main/java/com/asterinet/react/bgactions/RNBackgroundActionsTask.java
+@@ -10,20 +10,73 @@
+ import android.net.Uri;
+ import android.os.Build;
+ import android.os.Bundle;
++import android.util.Log;
+ 
+ import androidx.annotation.NonNull;
+ import androidx.annotation.Nullable;
+ import androidx.core.app.NotificationCompat;
+ import androidx.core.app.ServiceCompat;
++import androidx.lifecycle.DefaultLifecycleObserver;
++import androidx.lifecycle.Lifecycle;
++import androidx.lifecycle.LifecycleOwner;
++import androidx.lifecycle.ProcessLifecycleOwner;
+ 
+ import com.facebook.react.HeadlessJsTaskService;
+ import com.facebook.react.bridge.Arguments;
++import com.facebook.react.bridge.ReactContext;
+ import com.facebook.react.jstasks.HeadlessJsTaskConfig;
+-
+-final public class RNBackgroundActionsTask extends HeadlessJsTaskService {
++import com.facebook.react.modules.core.DeviceEventManagerModule;
++
++final public class RNBackgroundActionsTask extends HeadlessJsTaskService implements DefaultLifecycleObserver {
+ 
+     public static final int SERVICE_NOTIFICATION_ID = 92901;
+     private static final String CHANNEL_ID = "RN_BACKGROUND_ACTIONS_CHANNEL";
++    private static RNBackgroundActionsTask instance;
++    private static BackgroundTaskOptions pendingOptions;
++    private BackgroundTaskOptions currentOptions;
++    private String taskName;
++    private boolean foreground = false;
++    private int notificationId = SERVICE_NOTIFICATION_ID;
++    private boolean anchorOngoing = true;
++
++    static boolean isAppVisible() {
++        return ProcessLifecycleOwner.get().getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED);
++    }
++
++    @Override
++    public void onCreate() {
++        super.onCreate();
++        instance = this;
++        ProcessLifecycleOwner.get().getLifecycle().addObserver(this);
++    }
++
++    @Override
++    public void onStart(@NonNull LifecycleOwner owner) {
++        updateForeground();
++    }
++
++    @Override
++    public void onStop(@NonNull LifecycleOwner owner) {
++        // Native delivery uses Android's visible-to-background exemption,
++        // independently of how busy the JS thread is.
++        updateForeground();
++    }
++
++    @Override
++    public void onDestroy() {
++        ProcessLifecycleOwner.get().getLifecycle().removeObserver(this);
++        if (instance == this) instance = null;
++        final boolean retainResult = currentOptions != null && !currentOptions.isOngoing();
++        currentOptions = null;
++        ServiceCompat.stopForeground(this, retainResult ? ServiceCompat.STOP_FOREGROUND_DETACH : ServiceCompat.STOP_FOREGROUND_REMOVE);
++        super.onDestroy();
++        // JS filters expected stops and stale generations by the original task name.
++        final ReactContext context = getReactContext();
++        if (taskName != null && context != null && context.hasActiveReactInstance()) {
++            context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
++                    .emit("stopped", taskName);
++        }
++    }
+ 
+     @SuppressLint("UnspecifiedImmutableFlag")
+     @NonNull
+@@ -37,6 +90,8 @@
+         Intent notificationIntent;
+         if (linkingURI != null) {
+             notificationIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(linkingURI));
++            notificationIntent.setPackage(context.getPackageName());
++            notificationIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+         } else {
+             //as RN works on single activity architecture - we don't need to find current activity on behalf of react context
+             notificationIntent = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
+@@ -52,14 +107,18 @@
+             // IMMUTABLE is available and recommended from API 23+
+             pendingIntentFlags |= PendingIntent.FLAG_IMMUTABLE;
+         }
+-        contentIntent = PendingIntent.getActivity(context, 0, notificationIntent, pendingIntentFlags);
++        contentIntent = PendingIntent.getActivity(context, bgOptions.getNotificationId(), notificationIntent, pendingIntentFlags);
+         final NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL_ID)
+                 .setContentTitle(taskTitle)
+                 .setContentText(taskDesc)
+                 .setSmallIcon(iconInt)
+                 .setContentIntent(contentIntent)
+-                .setOngoing(true)
+-                .setPriority(NotificationCompat.PRIORITY_MIN)
++                .setOngoing(bgOptions.isOngoing())
++                .setAutoCancel(!bgOptions.isOngoing())
++                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
++                .setOnlyAlertOnce(true)
++                .setSilent(true)
++                .setPriority(NotificationCompat.PRIORITY_LOW)
+                 .setColor(color);
+ 
+         final Bundle progressBarBundle = bgOptions.getProgressBar();
+@@ -92,28 +151,82 @@
+         if (extras == null) {
+             throw new IllegalArgumentException("Extras cannot be null");
+         }
+-        final BackgroundTaskOptions bgOptions = new BackgroundTaskOptions(extras);
+-        createNotificationChannel(bgOptions.getTaskTitle(), bgOptions.getTaskDesc()); // Necessary creating channel for API 26+
+-        // Create the notification
+-        final Notification notification = buildNotification(this, bgOptions);
+-
++        taskName = extras.getString("taskName");
++        currentOptions = pendingOptions != null && taskName != null
++                && taskName.equals(pendingOptions.getExtras().getString("taskName"))
++                ? pendingOptions : new BackgroundTaskOptions(extras);
++        pendingOptions = null;
++        createNotificationChannel(currentOptions.getTaskTitle(), currentOptions.getTaskDesc());
++        updateForeground();
++        super.onStartCommand(intent, flags, startId);
++        return START_NOT_STICKY;
++    }
++
++    private void detachFinishedResult() {
++        if (!foreground || anchorOngoing) return;
++        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH);
++        foreground = false;
++    }
++
++    /** Android cancels a foreground notification while stopping the service, before onDestroy. */
++    static void prepareStop() {
++        if (instance != null) instance.detachFinishedResult();
++    }
++
++    static void updateNotification(BackgroundTaskOptions options) {
++        if (instance == null || instance.taskName == null) {
++            // Admission may still be queued on Android's main thread. Preserve
++            // only its latest content; a different generation discards it.
++            pendingOptions = options;
++            return;
++        }
++        if (!instance.taskName.equals(options.getExtras().getString("taskName"))) return;
++        instance.currentOptions = options;
++        instance.updateForeground();
++    }
++
++    private void updateForeground() {
++        if (currentOptions == null) return;
++        final Notification notification = buildNotification(this, currentOptions);
+         try {
+-            ServiceCompat.startForeground(
+-                this,
+-                SERVICE_NOTIFICATION_ID,
+-                notification,
+-                bgOptions.getForegroundServiceType()
+-            );
++            final int nextId = currentOptions.getNotificationId();
++            if (foreground && notificationId == nextId) {
++                getSystemService(NotificationManager.class).notify(nextId, notification);
++            } else {
++                // Switching identity would make Android cancel the previous one; a finished
++                // destination keeps its result, so only its service ownership moves.
++                detachFinishedResult();
++                ServiceCompat.startForeground(this, nextId, notification, currentOptions.getForegroundServiceType());
++                if (notificationId == SERVICE_NOTIFICATION_ID && nextId != notificationId) {
++                    getSystemService(NotificationManager.class).cancel(notificationId);
++                }
++                notificationId = nextId;
++                foreground = true;
++            }
++            anchorOngoing = currentOptions.isOngoing();
++            emitProtection(true);
+         } catch (RuntimeException e) {
+             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                     && e instanceof android.app.ForegroundServiceStartNotAllowedException) {
+-                // Android 12+: not allowed to start foreground service from background
+-                stopSelf(startId);
+-                return START_NOT_STICKY;
++                // Android 12+ refused promotion. The started service keeps the task
++                // until Android stops it; destruction then reports the interruption.
++                Log.w("RNBackgroundActions", "Foreground promotion refused", e);
++                emitProtection(false);
++                return;
+             }
+             throw e;
+         }
+-        return super.onStartCommand(intent, flags, startId);
++    }
++
++    private void emitProtection(boolean protectedExecution) {
++        final ReactContext context = getReactContext();
++        if (taskName != null && context != null && context.hasActiveReactInstance()) {
++            final com.facebook.react.bridge.WritableMap event = Arguments.createMap();
++            event.putString("taskName", taskName);
++            event.putBoolean("protected", protectedExecution);
++            context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
++                    .emit("protectionChanged", event);
++        }
+     }
+ 
+     @Override
+@@ -124,6 +237,7 @@
+ 
+     @Override
+     public void onTimeout(int startId, int fgsType) {
++        emitProtection(false);
+         super.onTimeout(startId, fgsType);
+         stopSelf(startId);
+     }
+diff --git a/lib/types/index.d.ts b/lib/types/index.d.ts
+--- a/lib/types/index.d.ts
++++ b/lib/types/index.d.ts
+@@ -8,6 +8,8 @@
+         type: string;
+         package?: string;
+     };
++    notificationId?: number;
++    taskOngoing?: boolean;
+     color?: string | undefined;
+     linkingURI?: string | undefined;
+     progressBar?: {
+@@ -28,15 +30,17 @@
+  *            progressBar?: {max: number, value: number, indeterminate?: boolean},
+  *            foregroundServiceType?: Array<'dataSync'|'mediaPlayback'|'phoneCall'|'location'|'connectedDevice'|'mediaProjection'|'camera'|'microphone'|'health'|'remoteMessaging'|'systemExempted'|'shortService'|'specialUse'>
+  *            }} BackgroundTaskOptions
+- * @extends EventEmitter<'expiration',any>
++ * @extends EventEmitter<'expiration'|'stopped',any>
+  */
+-declare class BackgroundServer extends EventEmitter<"expiration", any> {
++declare class BackgroundServer extends EventEmitter<"expiration" | "stopped" | "protectionChanged", any> {
+     /** @private */
+     private _runnedTasks;
+     /** @private @type {(arg0?: any) => void} */
+     private _stopTask;
+     /** @private */
+     private _isRunning;
++    private _activeTaskName;
++    private _isProtected;
+     /** @private @type {BackgroundTaskOptions} */
+     private _currentOptions;
+     /**
+@@ -65,6 +69,8 @@
+             type: string;
+             package?: string;
+         };
++        notificationId?: number;
++        taskOngoing?: boolean;
+         color?: string;
+         linkingURI?: string;
+         progressBar?: {
+@@ -80,6 +86,7 @@
+      *
+      * It returns `false` if `stop()` has been called, **even if the task has not finished**.
+      */
++    isProtected(): boolean;
+     isRunning(): boolean;
+     /**
+      * @template T
+@@ -97,6 +104,8 @@
+             type: string;
+             package?: string;
+         };
++        notificationId?: number;
++        taskOngoing?: boolean;
+         color?: string | undefined;
+         linkingURI?: string | undefined;
+         progressBar?: {
+@@ -112,7 +121,8 @@
+      * @private
+      * @template T
+      * @param {(taskData?: T) => Promise<void>} task
+-     * @param {T} [parameters]
++     * @param {T | undefined} parameters
++     * @param {string} taskName
+      */
+     private _generateTask;
+     /**
+diff --git a/src/index.js b/src/index.js
+--- a/src/index.js
++++ b/src/index.js
+@@ -7,12 +7,14 @@
+  *            taskTitle: string,
+  *            taskDesc: string,
+  *            taskIcon: {name: string, type: string, package?: string},
++ *            notificationId?: number,
++ *            taskOngoing?: boolean,
+  *            color?: string
+  *            linkingURI?: string,
+  *            progressBar?: {max: number, value: number, indeterminate?: boolean},
+  *            foregroundServiceType?: Array<'dataSync'|'mediaPlayback'|'phoneCall'|'location'|'connectedDevice'|'mediaProjection'|'camera'|'microphone'|'health'|'remoteMessaging'|'systemExempted'|'shortService'|'specialUse'>
+  *            }} BackgroundTaskOptions
+- * @extends EventEmitter<'expiration',any>
++ * @extends EventEmitter<'expiration'|'stopped'|'protectionChanged',any>
+  */
+ class BackgroundServer extends EventEmitter {
+     constructor() {
+@@ -23,6 +25,9 @@
+         this._stopTask = () => {};
+         /** @private */
+         this._isRunning = false;
++        /** @private @type {string | undefined} */
++        this._activeTaskName;
++        this._isProtected = false;
+         /** @private @type {BackgroundTaskOptions} */
+         this._currentOptions;
+         this._addListeners();
+@@ -33,6 +38,19 @@
+      */
+     _addListeners() {
+         nativeEventEmitter.addListener('expiration', () => this.emit('expiration'));
++        nativeEventEmitter.addListener('protectionChanged', (event) => {
++            if (event.taskName !== this._activeTaskName) return;
++            this._isProtected = event.protected;
++            this.emit('protectionChanged');
++        });
++        nativeEventEmitter.addListener('stopped', (taskName) => {
++            if (taskName !== this._activeTaskName) return;
++            this._activeTaskName = undefined;
++            this._isRunning = false;
++            this._isProtected = false;
++            this._stopTask();
++            this.emit('stopped');
++        });
+     }
+ 
+     /**
+@@ -53,7 +71,10 @@
+         if (Platform.OS !== 'android') return;
+         if (!this.isRunning())
+             throw new Error('A BackgroundAction must be running before updating the notification');
+-        this._currentOptions = this._normalizeOptions({ ...this._currentOptions, ...taskData });
++        this._currentOptions = {
++            ...this._normalizeOptions({ ...this._currentOptions, ...taskData }),
++            taskName: this._currentOptions.taskName,
++        };
+         await RNBackgroundActions.updateNotification(this._currentOptions);
+     }
+ 
+@@ -64,6 +85,10 @@
+      *
+      * It returns `false` if `stop()` has been called, **even if the task has not finished**.
+      */
++    isProtected() {
++        return this._isProtected;
++    }
++
+     isRunning() {
+         return this._isRunning;
+     }
+@@ -78,11 +103,21 @@
+     async start(task, options) {
+         this._runnedTasks++;
+         this._currentOptions = this._normalizeOptions(options);
+-        const finalTask = this._generateTask(task, options.parameters);
++        const taskName = this._currentOptions.taskName;
++        const finalTask = this._generateTask(task, options.parameters, taskName);
+         if (Platform.OS === 'android') {
+-            AppRegistry.registerHeadlessTask(this._currentOptions.taskName, () => finalTask);
+-            await RNBackgroundActions.start(this._currentOptions);
+-            this._isRunning = true;
++            this._activeTaskName = taskName;
++            AppRegistry.registerHeadlessTask(taskName, () => finalTask);
++            try {
++                await RNBackgroundActions.start(this._currentOptions);
++                if (this._activeTaskName !== taskName) {
++                    throw new Error('Background service stopped while starting');
++                }
++                this._isRunning = true;
++            } catch (error) {
++                if (this._activeTaskName === taskName) this._activeTaskName = undefined;
++                throw error;
++            }
+         } else {
+             await RNBackgroundActions.start(this._currentOptions);
+             this._isRunning = true;
+@@ -94,14 +129,18 @@
+      * @private
+      * @template T
+      * @param {(taskData?: T) => Promise<void>} task
+-     * @param {T} [parameters]
++     * @param {T | undefined} parameters
++     * @param {string} taskName
+      */
+-    _generateTask(task, parameters) {
++    _generateTask(task, parameters, taskName) {
+         const self = this;
+         return async () => {
++            if (Platform.OS === 'android' && self._activeTaskName !== taskName) return;
+             await new Promise((resolve) => {
+                 self._stopTask = resolve;
+-                task(parameters).then(() => self.stop());
++                task(parameters).then(() => {
++                    if (Platform.OS !== 'android' || self._activeTaskName === taskName) return self.stop();
++                });
+             });
+         };
+     }
+@@ -116,6 +155,8 @@
+             taskTitle: options.taskTitle,
+             taskDesc: options.taskDesc,
+             taskIcon: { ...options.taskIcon },
++            notificationId: options.notificationId,
++            taskOngoing: options.taskOngoing,
+             color: options.color || '#ffffff',
+             linkingURI: options.linkingURI,
+             progressBar: options.progressBar,
+@@ -129,9 +170,12 @@
+      * @returns {Promise<void>}
+      */
+     async stop() {
++        // Invalidate before native destruction can emit its asynchronous event.
++        this._activeTaskName = undefined;
++        this._isRunning = false;
++        this._isProtected = false;
+         this._stopTask();
+         await RNBackgroundActions.stop();
+-        this._isRunning = false;
+     }
+ }
+ 

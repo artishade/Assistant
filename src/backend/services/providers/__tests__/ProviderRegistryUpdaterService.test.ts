@@ -130,18 +130,12 @@ it('falls back to the previous complete snapshot when the newest payload is inva
   expect(mockRequest).not.toHaveBeenCalled();
 });
 
-it('keeps first download retryable after failure and uses the fallback host', async () => {
+it('keeps first download retryable after failure and applies when the host recovers', async () => {
   mockRequest.mockRejectedValue(new Error('Offline'));
   await expect(updater.ensureReady()).rejects.toThrow('Offline');
   expect(providerRegistryService.isReady()).toBe(false);
   const remote = snapshot(1);
   serve(remote);
-  const success = mockRequest.getMockImplementation()!;
-  mockRequest.mockImplementation((source, request) =>
-    source.includes('githubusercontent')
-      ? Promise.reject(new Error('Host unavailable'))
-      : success(source, request),
-  );
   await updater.ensureReady();
   expect(providerRegistryService.isReady()).toBe(true);
   expect(writeProviderRegistrySnapshot).toHaveBeenCalledWith(

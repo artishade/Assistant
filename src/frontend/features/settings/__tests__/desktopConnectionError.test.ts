@@ -21,7 +21,7 @@ const TRANSLATIONS: Record<string, string> = {
   'settings.desktopConnection.error.unreachable':
     'Could not connect to the PC. Make sure both devices are on the same local network.',
   'settings.desktopConnection.error.unreachable.ios':
-    'Could not connect to the PC. Check that the devices can reach each other, and make sure Cherry Studio is allowed under Settings › Privacy & Security › Local Network.',
+    'Could not connect to the PC. Check that the devices can reach each other, and make sure Optimuse is allowed under Settings › Privacy & Security › Local Network.',
 };
 const t = ((key: string) => TRANSLATIONS[key] ?? key) as unknown as TFunction;
 

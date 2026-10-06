@@ -20,9 +20,9 @@ jest.mock('@/backend/services/http', () => ({
 }));
 
 const downloadUrl =
-  'https://gitcode.com/CherryHQ/cherry-studio-app/releases/download/v1.10.0/cherry-studio-1.10.0-android.apk';
+  'https://github.com/artishade/Assistant/releases/download/v1.10.0/optimuse-1.10.0-android.apk';
 const apk = {
-  name: 'cherry-studio-1.10.0-android.apk',
+  name: 'optimuse-1.10.0-android.apk',
   type: 'attach',
   browser_download_url: downloadUrl,
 };
@@ -32,9 +32,9 @@ const release = {
   release_status: 'latest',
   assets: [
     {
-      name: 'cherry-studio-app-v1.10.0.zip',
+      name: 'Assistant-v1.10.0.zip',
       type: 'source',
-      browser_download_url: 'https://gitcode.com/CherryHQ/cherry-studio-app/-/archive/v1.10.0.zip',
+      browser_download_url: 'https://github.com/artishade/Assistant/archive/refs/tags/v1.10.0.zip',
     },
     apk,
   ],
@@ -48,7 +48,7 @@ beforeEach(() => {
 
 afterEach(() => jest.restoreAllMocks());
 
-test('selects the latest GitCode APK attachment and forwards cancellation', async () => {
+test('selects the latest GitHub APK attachment and forwards cancellation', async () => {
   const signal = new AbortController().signal;
   const updates = createAppUpdateModule();
   expect(updates.isEnabled).toBe(true);
@@ -61,7 +61,7 @@ test('selects the latest GitCode APK attachment and forwards cancellation', asyn
   expect(mockRequest).toHaveBeenCalledWith(
     expect.objectContaining({
       method: 'GET',
-      path: '/repos/CherryHQ/cherry-studio-app/releases/latest',
+      path: '/repos/artishade/Assistant/releases/latest',
       query: { type: 'latest' },
       signal,
     }),
@@ -82,8 +82,8 @@ test.each(['1.10.0', '2.0.0'])(
 
 test.each([
   { assets: [] },
-  { assets: [{ ...apk, name: 'cherry-studio-1.10.0-android.aab' }] },
-  { assets: [{ ...apk, name: 'cherry-studio-1.9.0-android.apk' }] },
+  { assets: [{ ...apk, name: 'optimuse-1.10.0-android.aab' }] },
+  { assets: [{ ...apk, name: 'optimuse-1.9.0-android.apk' }] },
   { assets: [{ ...apk, type: 'source' }] },
   { assets: [{ ...apk, browser_download_url: 'https://unrelated.example/app.apk' }] },
   { assets: [{ ...apk, browser_download_url: downloadUrl.replace('/v1.10.0/', '/v1.9.0/') }] },
@@ -179,8 +179,8 @@ test('only an explicit download action opens the APK in the system browser', asy
 test.each([
   'https://unrelated.example/app.apk',
   downloadUrl.replace('https:', 'http:'),
-  downloadUrl.replace('gitcode.com', 'gitcode.com.unrelated.example'),
-  downloadUrl.replace('cherry-studio-app/', 'cherry-studio/'),
+  downloadUrl.replace('github.com', 'github.com.unrelated.example'),
+  downloadUrl.replace('artishade/Assistant/', 'artishade/Other/'),
   downloadUrl.replace('/v1.10.0/', '/v1.9.0/'),
   downloadUrl.replace('.apk', '.aab'),
   `${downloadUrl}?redirect=https://unrelated.example/`,

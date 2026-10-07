@@ -7,24 +7,26 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+  PNPM_HOME: $HOME/.local/share/pnpm
+
 jobs:
   android-apk:
+    name: Build Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    permissions:
-      contents: read
-    env:
-      NODE_OPTIONS: --max-old-space-size=4096
-      PNPM_HOME: $HOME/.local/share/pnpm
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Configure pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 12.2.1
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -32,21 +34,50 @@ jobs:
           node-version-file: package.json
           cache: 'pnpm'
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
+      - name: Setup Expo and EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+          packager: pnpm
+
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Generate native project
         run: pnpm prebuild --clean
 
-      - name: Build APK with EAS Build (local)
-        run: npx eas build --platform android --local --skip-build-cache
+      - name: Build Android APK
+        run: eas build --platform android --profile development --non-interactive --wait --json > "$RUNNER_TEMP/android-build.json"
+
+      - name: Download APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          jq -e 'length == 1 and .[0].status == "FINISHED" and .[0].platform == "ANDROID"' "$RUNNER_TEMP/android-build.json"
+          build_id="$(jq -er '.[0].id' "$RUNNER_TEMP/android-build.json")"
+          apk_url="$(jq -er '.[0].artifacts.applicationArchiveUrl' "$RUNNER_TEMP/android-build.json")"
+          artifact_dir="$RUNNER_TEMP/android-apk"
+          mkdir -p "$artifact_dir"
+          apk_name="optimuse-$(jq -r '.expo.version' app.json)-android.apk"
+          curl --fail --location --retry 3 --connect-timeout 30 --max-time 900 \
+            "$apk_url" --output "$artifact_dir/$apk_name"
+          unzip -tq "$artifact_dir/$apk_name"
+          unzip -Z1 "$artifact_dir/$apk_name" | grep -x 'AndroidManifest.xml'
+          (cd "$artifact_dir" && sha256sum "$apk_name" > SHA256SUMS)
+          echo "Android EAS build: $build_id" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
           path: |
-            android-*.apk
-            *.apk
+            ${{ runner.temp }}/android-apk/*.apk
+            ${{ runner.temp }}/android-apk/SHA256SUMS
           if-no-files-found: error
           retention-days: 30

@@ -28,16 +28,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version-file: package.json
           cache: 'pnpm'
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 12.2.1
 
       - name: Setup Expo and EAS
         uses: expo/expo-github-action@v8
@@ -53,7 +53,7 @@ jobs:
         run: pnpm prebuild --clean
 
       - name: Build Android APK
-        run: eas build --platform android --profile development --non-interactive --wait --json > "$RUNNER_TEMP/android-build.json"
+        run: eas build --platform android --non-interactive --wait --json > "$RUNNER_TEMP/android-build.json"
 
       - name: Download APK
         env:

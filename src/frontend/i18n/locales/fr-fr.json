@@ -1869,5 +1869,18 @@
   "settings.websearch.provider.selection": "Fournisseur de recherche",
   "settings.websearch.provider.showApiKeys": "Afficher la clé API",
   "settings.websearch.provider.title": "Fournisseur de recherche",
-  "systemEntry.failed": "Impossible d’ouvrir ce partage. Partagez à nouveau le contenu."
+  "systemEntry.failed": "Impossible d’ouvrir ce partage. Partagez à nouveau le contenu.",
+  "webAccess.capabilities.agents.title": "Agents",
+  "webAccess.capabilities.chat.title": "Discussion",
+  "webAccess.capabilities.files.title": "Fichiers",
+  "webAccess.capabilities.terminal.title": "Terminal",
+  "webAccess.deviceName": "Accès depuis {{name}}",
+  "webAccess.deviceName.fallback": "Cet appareil",
+  "webAccess.loading": "Vérification de l'accès",
+  "webAccess.open.description": "L'accès depuis le navigateur s'ouvre via l'appairage d'appareils que vous contrôlez déjà : un navigateur de votre réseau le reprend, l'observe et le pilote — votre appareil reste l'exécuteur.",
+  "webAccess.open.title": "Ouvrir depuis un navigateur",
+  "webAccess.status.available": "Disponible",
+  "webAccess.status.needs-setup": "Associez d'abord un ordinateur",
+  "webAccess.status.platform-unsupported": "Nécessite la version Android",
+  "webAccess.title": "Accès web"
 }

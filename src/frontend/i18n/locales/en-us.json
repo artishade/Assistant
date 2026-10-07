@@ -1860,5 +1860,18 @@
   "settings.websearch.provider.selection": "Search provider",
   "settings.websearch.provider.showApiKeys": "Show API Key",
   "settings.websearch.provider.title": "Search provider",
-  "systemEntry.failed": "Could not open this share. Share the content again."
+  "systemEntry.failed": "Could not open this share. Share the content again.",
+  "webAccess.capabilities.agents.title": "Agents",
+  "webAccess.capabilities.chat.title": "Chat",
+  "webAccess.capabilities.files.title": "Files",
+  "webAccess.capabilities.terminal.title": "Terminal",
+  "webAccess.deviceName": "Access from {{name}}",
+  "webAccess.deviceName.fallback": "This device",
+  "webAccess.loading": "Checking access",
+  "webAccess.open.description": "Browser access opens through the device pairing you already control: a browser on your network resumes it, watches, and drives — your device stays the executor.",
+  "webAccess.open.title": "Open from a browser",
+  "webAccess.status.available": "Available",
+  "webAccess.status.needs-setup": "Pair a computer first",
+  "webAccess.status.platform-unsupported": "Needs the Android build",
+  "webAccess.title": "Web access"
 }

@@ -14,6 +14,7 @@ import type { ProfileModule } from './profile';
 import type { ProvidersModule } from './providers';
 import type { RemoteAgentModule } from './remoteAgent';
 import type { SystemEntryModule } from './systemEntry';
+import type { WebAccessModule } from './webAccess';
 import type { WebSearchModule } from './webSearch';
 
 export interface Backend {
@@ -34,6 +35,7 @@ export interface Backend {
   readonly profile: ProfileModule;
   readonly providers: ProvidersModule;
   readonly webSearch: WebSearchModule;
+  readonly webAccess: WebAccessModule;
 }
 
 export type BackendModuleKey = keyof Backend;

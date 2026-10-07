@@ -1,6 +1,7 @@
 import BellIcon from '@cherrystudio/app-icons/icons/bell';
 import CloudIcon from '@cherrystudio/app-icons/icons/cloud';
 import DatabaseIcon from '@cherrystudio/app-icons/icons/database';
+import GlobeIcon from '@cherrystudio/app-icons/icons/globe';
 import InfoIcon from '@cherrystudio/app-icons/icons/info';
 import LockIcon from '@cherrystudio/app-icons/icons/lock';
 import NetworkIcon from '@cherrystudio/app-icons/icons/network';
@@ -79,6 +80,12 @@ export default function SettingsScreen() {
               label={t('settings.items.deviceConnections')}
               leading={<NetworkIcon className="size-4 text-foreground" />}
               onPress={() => router.push('/settings/device-connections')}
+            />
+            <Section.Item
+              label={t('webAccess.title')}
+              leading={<GlobeIcon className="size-4 text-foreground" />}
+              onPress={() => router.push('/settings/web-access')}
+              testID="settings-web-access"
             />
           </Section>
           <Section>

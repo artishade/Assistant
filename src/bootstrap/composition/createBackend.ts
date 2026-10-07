@@ -58,6 +58,7 @@ import type { ProviderRegistryUpdaterService } from '@/backend/services/provider
 import { providerRegistryUpdates } from '@/backend/services/providers/providerRegistryUpdates';
 import type { RemoteAgentRuntime, RemoteBackgroundExecution } from '@/backend/services/remoteAgent';
 import { createSystemEntryModule, createSystemShareImporter } from '@/backend/services/systemEntry';
+import { webAccessService } from '@/backend/services/webAccess';
 import type { BackendServices } from '@/bootstrap/composition/createBackendServices';
 import type { Backend } from '@/shared/contracts';
 import type { BackgroundExecutionModule } from '@/shared/contracts/backgroundExecution';
@@ -275,6 +276,7 @@ export function createBackend(
       profile,
       providers,
       webSearch: services.webSearch,
+      webAccess: webAccessService,
     },
     dataApiDependencies: {
       agentAvatars,

@@ -12,5 +12,6 @@ export * from './providers';
 export * from './webSearch';
 export * from './plugins';
 export * from './terminal';
+export * from './webAccess';
 export * from './providerAccounts';
 export type { SystemAction, SystemEntryModule, SystemSharedFile } from './systemEntry';

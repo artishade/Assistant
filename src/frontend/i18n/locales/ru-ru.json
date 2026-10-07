@@ -1878,5 +1878,18 @@
   "settings.websearch.provider.selection": "Поставщик поиска",
   "settings.websearch.provider.showApiKeys": "Показать ключ API",
   "settings.websearch.provider.title": "Поставщик поиска",
-  "systemEntry.failed": "Не удалось открыть этот материал. Поделитесь содержимым ещё раз."
+  "systemEntry.failed": "Не удалось открыть этот материал. Поделитесь содержимым ещё раз.",
+  "webAccess.capabilities.agents.title": "Агенты",
+  "webAccess.capabilities.chat.title": "Чат",
+  "webAccess.capabilities.files.title": "Файлы",
+  "webAccess.capabilities.terminal.title": "Терминал",
+  "webAccess.deviceName": "Доступ с {{name}}",
+  "webAccess.deviceName.fallback": "Это устройство",
+  "webAccess.loading": "Проверка доступа",
+  "webAccess.open.description": "Доступ из браузера открывается через уже настроенное сопряжение устройств: браузер в вашей сети возобновляет работу, наблюдает и управляет — ваше устройство остаётся исполнителем.",
+  "webAccess.open.title": "Открыть в браузере",
+  "webAccess.status.available": "Доступно",
+  "webAccess.status.needs-setup": "Сначала сопрягите компьютер",
+  "webAccess.status.platform-unsupported": "Требуется версия для Android",
+  "webAccess.title": "Веб-доступ"
 }

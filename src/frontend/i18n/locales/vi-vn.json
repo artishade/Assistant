@@ -1851,5 +1851,18 @@
   "settings.websearch.provider.selection": "Nhà cung cấp dịch vụ tìm kiếm",
   "settings.websearch.provider.showApiKeys": "Hiển thị khóa API",
   "settings.websearch.provider.title": "Nhà cung cấp dịch vụ tìm kiếm",
-  "systemEntry.failed": "Không thể mở nội dung chia sẻ này. Hãy chia sẻ lại."
+  "systemEntry.failed": "Không thể mở nội dung chia sẻ này. Hãy chia sẻ lại.",
+  "webAccess.capabilities.agents.title": "Tác nhân",
+  "webAccess.capabilities.chat.title": "Trò chuyện",
+  "webAccess.capabilities.files.title": "Tệp",
+  "webAccess.capabilities.terminal.title": "Terminal",
+  "webAccess.deviceName": "Truy cập từ {{name}}",
+  "webAccess.deviceName.fallback": "Thiết bị này",
+  "webAccess.loading": "Đang kiểm tra quyền truy cập",
+  "webAccess.open.description": "Truy cập bằng trình duyệt mở qua việc ghép nối thiết bị mà bạn đã kiểm soát: một trình duyệt trong mạng của bạn sẽ tiếp tục, theo dõi và điều khiển — thiết bị của bạn vẫn là bên thực thi.",
+  "webAccess.open.title": "Mở từ trình duyệt",
+  "webAccess.status.available": "Khả dụng",
+  "webAccess.status.needs-setup": "Hãy ghép nối máy tính trước",
+  "webAccess.status.platform-unsupported": "Cần bản dựng Android",
+  "webAccess.title": "Truy cập web"
 }

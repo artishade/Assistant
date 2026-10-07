@@ -1851,5 +1851,18 @@
   "settings.websearch.provider.selection": "検索プロバイダー",
   "settings.websearch.provider.showApiKeys": "API キーを表示",
   "settings.websearch.provider.title": "検索プロバイダー",
-  "systemEntry.failed": "この共有を開けませんでした。もう一度共有してください。"
+  "systemEntry.failed": "この共有を開けませんでした。もう一度共有してください。",
+  "webAccess.capabilities.agents.title": "エージェント",
+  "webAccess.capabilities.chat.title": "チャット",
+  "webAccess.capabilities.files.title": "ファイル",
+  "webAccess.capabilities.terminal.title": "ターミナル",
+  "webAccess.deviceName": "{{name}} からのアクセス",
+  "webAccess.deviceName.fallback": "このデバイス",
+  "webAccess.loading": "アクセスを確認中",
+  "webAccess.open.description": "ブラウザからのアクセスは、すでに管理しているデバイスのペアリングを通じて開きます。ネットワーク上のブラウザがそれを再開し、監視し、操作します。実際に実行するのは引き続きデバイス側です。",
+  "webAccess.open.title": "ブラウザから開く",
+  "webAccess.status.available": "利用可能",
+  "webAccess.status.needs-setup": "先にコンピューターをペアリングしてください",
+  "webAccess.status.platform-unsupported": "Android 版が必要です",
+  "webAccess.title": "Web アクセス"
 }

@@ -1851,5 +1851,18 @@
   "settings.websearch.provider.selection": "搜索供應商",
   "settings.websearch.provider.showApiKeys": "顯示 API Key",
   "settings.websearch.provider.title": "搜索供應商",
-  "systemEntry.failed": "無法開啟此分享，請重新分享內容。"
+  "systemEntry.failed": "無法開啟此分享，請重新分享內容。",
+  "webAccess.capabilities.agents.title": "智慧代理",
+  "webAccess.capabilities.chat.title": "聊天",
+  "webAccess.capabilities.files.title": "檔案",
+  "webAccess.capabilities.terminal.title": "終端機",
+  "webAccess.deviceName": "從 {{name}} 存取",
+  "webAccess.deviceName.fallback": "本裝置",
+  "webAccess.loading": "正在檢查存取權限",
+  "webAccess.open.description": "瀏覽器存取透過你已掌控的裝置配對開啟：同一網路中的瀏覽器可恢復連線、檢視並操作——你的裝置始終是執行者。",
+  "webAccess.open.title": "從瀏覽器開啟",
+  "webAccess.status.available": "可用",
+  "webAccess.status.needs-setup": "請先配對電腦",
+  "webAccess.status.platform-unsupported": "需要安卓版",
+  "webAccess.title": "網頁存取"
 }

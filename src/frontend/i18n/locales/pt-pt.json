@@ -1869,5 +1869,18 @@
   "settings.websearch.provider.selection": "Fornecedor de pesquisa",
   "settings.websearch.provider.showApiKeys": "Mostrar chave API",
   "settings.websearch.provider.title": "Fornecedor de pesquisa",
-  "systemEntry.failed": "Não foi possível abrir esta partilha. Partilhe o conteúdo novamente."
+  "systemEntry.failed": "Não foi possível abrir esta partilha. Partilhe o conteúdo novamente.",
+  "webAccess.capabilities.agents.title": "Agentes",
+  "webAccess.capabilities.chat.title": "Conversa",
+  "webAccess.capabilities.files.title": "Ficheiros",
+  "webAccess.capabilities.terminal.title": "Terminal",
+  "webAccess.deviceName": "Acesso a partir de {{name}}",
+  "webAccess.deviceName.fallback": "Este dispositivo",
+  "webAccess.loading": "A verificar o acesso",
+  "webAccess.open.description": "O acesso pelo navegador abre através do emparelhamento de dispositivos que já controla: um navegador na sua rede retoma-o, observa e controla — o seu dispositivo continua a ser o executor.",
+  "webAccess.open.title": "Abrir num navegador",
+  "webAccess.status.available": "Disponível",
+  "webAccess.status.needs-setup": "Emparelhe primeiro um computador",
+  "webAccess.status.platform-unsupported": "Requer a versão Android",
+  "webAccess.title": "Acesso web"
 }

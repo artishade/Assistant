@@ -1851,5 +1851,18 @@
   "settings.websearch.provider.selection": "搜索服务商",
   "settings.websearch.provider.showApiKeys": "显示 API Key",
   "settings.websearch.provider.title": "搜索服务商",
-  "systemEntry.failed": "无法打开此分享，请重新分享内容。"
+  "systemEntry.failed": "无法打开此分享，请重新分享内容。",
+  "webAccess.capabilities.agents.title": "智能体",
+  "webAccess.capabilities.chat.title": "聊天",
+  "webAccess.capabilities.files.title": "文件",
+  "webAccess.capabilities.terminal.title": "终端",
+  "webAccess.deviceName": "从 {{name}} 访问",
+  "webAccess.deviceName.fallback": "本设备",
+  "webAccess.loading": "正在检查访问权限",
+  "webAccess.open.description": "浏览器访问通过你已掌控的设备配对开启：同一网络中的浏览器可恢复连接、查看并操作——你的设备始终是执行者。",
+  "webAccess.open.title": "从浏览器打开",
+  "webAccess.status.available": "可用",
+  "webAccess.status.needs-setup": "请先配对电脑",
+  "webAccess.status.platform-unsupported": "需要安卓版",
+  "webAccess.title": "网页访问"
 }

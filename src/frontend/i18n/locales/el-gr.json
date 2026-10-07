@@ -1860,5 +1860,18 @@
   "settings.websearch.provider.selection": "Πάροχος αναζήτησης",
   "settings.websearch.provider.showApiKeys": "Εμφάνιση κλειδιού API",
   "settings.websearch.provider.title": "Πάροχος αναζήτησης",
-  "systemEntry.failed": "Δεν ήταν δυνατό το άνοιγμα αυτής της κοινοποίησης. Κοινοποιήστε ξανά το περιεχόμενο."
+  "systemEntry.failed": "Δεν ήταν δυνατό το άνοιγμα αυτής της κοινοποίησης. Κοινοποιήστε ξανά το περιεχόμενο.",
+  "webAccess.capabilities.agents.title": "Πράκτορες",
+  "webAccess.capabilities.chat.title": "Συνομιλία",
+  "webAccess.capabilities.files.title": "Αρχεία",
+  "webAccess.capabilities.terminal.title": "Τερματικό",
+  "webAccess.deviceName": "Πρόσβαση από το {{name}}",
+  "webAccess.deviceName.fallback": "Αυτή η συσκευή",
+  "webAccess.loading": "Έλεγχος πρόσβασης",
+  "webAccess.open.description": "Η πρόσβαση μέσω browser γίνεται μέσω της σύζευξης συσκευής που ήδη ελέγχετε: ένας browser στο δίκτυό σας την επαναφέρει, παρακολουθεί και χειρίζεται — η συσκευή σας παραμένει ο εκτελεστής.",
+  "webAccess.open.title": "Άνοιγμα από browser",
+  "webAccess.status.available": "Διαθέσιμο",
+  "webAccess.status.needs-setup": "Πρώτα ζεύξτε έναν υπολογιστή",
+  "webAccess.status.platform-unsupported": "Απαιτείται η έκδοση Android",
+  "webAccess.title": "Πρόσβαση από το web"
 }

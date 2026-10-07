@@ -1869,5 +1869,18 @@
   "settings.websearch.provider.selection": "Furnizor de căutare",
   "settings.websearch.provider.showApiKeys": "Afișează cheia API",
   "settings.websearch.provider.title": "Furnizor de căutare",
-  "systemEntry.failed": "Această partajare nu a putut fi deschisă. Partajați din nou conținutul."
+  "systemEntry.failed": "Această partajare nu a putut fi deschisă. Partajați din nou conținutul.",
+  "webAccess.capabilities.agents.title": "Agenți",
+  "webAccess.capabilities.chat.title": "Conversație",
+  "webAccess.capabilities.files.title": "Fișiere",
+  "webAccess.capabilities.terminal.title": "Terminal",
+  "webAccess.deviceName": "Acces de pe {{name}}",
+  "webAccess.deviceName.fallback": "Acest dispozitiv",
+  "webAccess.loading": "Se verifică accesul",
+  "webAccess.open.description": "Accesul din browser se deschide prin asocierea dispozitivelor pe care o controlezi deja: un browser din rețeaua ta îl reia, îl urmărește și îl controlează — dispozitivul tău rămâne executantul.",
+  "webAccess.open.title": "Deschide dintr-un browser",
+  "webAccess.status.available": "Disponibil",
+  "webAccess.status.needs-setup": "Asociază mai întâi un computer",
+  "webAccess.status.platform-unsupported": "Necesită versiunea Android",
+  "webAccess.title": "Acces web"
 }

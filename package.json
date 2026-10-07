@@ -20,6 +20,7 @@
   "scripts": {
     "build:local": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/buildLocal.ts",
     "dev": "PROFILE=development expo start --dev-client",
+    "web": "PROFILE=development expo start --web --host lan --port ${PORT:-8081}",
     "dev:clear": "PROFILE=development expo start --dev-client --clear",
     "start": "PROFILE=development expo start --dev-client",
     "start:clear": "PROFILE=development expo start --dev-client --clear",

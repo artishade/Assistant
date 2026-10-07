@@ -1860,5 +1860,18 @@
   "settings.websearch.provider.selection": "Arama sağlayıcısı",
   "settings.websearch.provider.showApiKeys": "API Anahtarını Göster",
   "settings.websearch.provider.title": "Arama sağlayıcısı",
-  "systemEntry.failed": "Bu paylaşım açılamadı. İçeriği yeniden paylaşın."
+  "systemEntry.failed": "Bu paylaşım açılamadı. İçeriği yeniden paylaşın.",
+  "webAccess.capabilities.agents.title": "Aracılar",
+  "webAccess.capabilities.chat.title": "Sohbet",
+  "webAccess.capabilities.files.title": "Dosyalar",
+  "webAccess.capabilities.terminal.title": "Terminal",
+  "webAccess.deviceName": "{{name}} üzerinden erişim",
+  "webAccess.deviceName.fallback": "Bu cihaz",
+  "webAccess.loading": "Erişim denetleniyor",
+  "webAccess.open.description": "Tarayıcı erişimi, hâlihazırda denetlediğiniz cihaz eşleştirmesi üzerinden açılır: ağınızdaki bir tarayıcı bunu sürdürür, izler ve yönetir — cihazınız yürütücü olarak kalır.",
+  "webAccess.open.title": "Tarayıcıdan aç",
+  "webAccess.status.available": "Kullanılabilir",
+  "webAccess.status.needs-setup": "Önce bir bilgisayar eşleştirin",
+  "webAccess.status.platform-unsupported": "Android sürümünü gerektirir",
+  "webAccess.title": "Web erişimi"
 }

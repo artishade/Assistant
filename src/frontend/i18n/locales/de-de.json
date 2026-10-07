@@ -1860,5 +1860,18 @@
   "settings.websearch.provider.selection": "Suchanbieter",
   "settings.websearch.provider.showApiKeys": "API-Schlüssel anzeigen",
   "settings.websearch.provider.title": "Suchanbieter",
-  "systemEntry.failed": "Diese Freigabe konnte nicht geöffnet werden. Teilen Sie den Inhalt erneut."
+  "systemEntry.failed": "Diese Freigabe konnte nicht geöffnet werden. Teilen Sie den Inhalt erneut.",
+  "webAccess.capabilities.agents.title": "Agenten",
+  "webAccess.capabilities.chat.title": "Chat",
+  "webAccess.capabilities.files.title": "Dateien",
+  "webAccess.capabilities.terminal.title": "Terminal",
+  "webAccess.deviceName": "Zugriff über {{name}}",
+  "webAccess.deviceName.fallback": "Dieses Gerät",
+  "webAccess.loading": "Zugriff wird geprüft",
+  "webAccess.open.description": "Der Browser-Zugriff läuft über die Gerätekopplung, die du bereits steuerst: ein Browser in deinem Netzwerk nimmt sie wieder auf, beobachtet und steuert – dein Gerät bleibt der Ausführer.",
+  "webAccess.open.title": "Im Browser öffnen",
+  "webAccess.status.available": "Verfügbar",
+  "webAccess.status.needs-setup": "Zuerst einen Computer koppeln",
+  "webAccess.status.platform-unsupported": "Benötigt die Android-Version",
+  "webAccess.title": "Web-Zugriff"
 }
